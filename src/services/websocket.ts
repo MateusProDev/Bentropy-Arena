@@ -25,10 +25,23 @@ export class WSClient {
   private botInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(url?: string) {
-    this.url = url || import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
+    this.url = url || import.meta.env.VITE_WS_URL || '';
   }
 
   public connect(joinPayload: JoinPayload): void {
+    // No server URL configured → immediate fallback with local bots
+    if (!this.url) {
+      this.startFallbackMode(joinPayload);
+      return;
+    }
+
+    // Prevent mixed content (ws:// from https:// page)
+    if (window.location.protocol === 'https:' && this.url.startsWith('ws://')) {
+      console.warn('[WS] Cannot use ws:// from https://, starting local mode');
+      this.startFallbackMode(joinPayload);
+      return;
+    }
+
     try {
       this.ws = new WebSocket(this.url);
 
@@ -66,6 +79,8 @@ export class WSClient {
   }
 
   private attemptReconnect(joinPayload: JoinPayload): void {
+    if (this.isFallbackMode) return;
+
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.warn('[WS] Max reconnect attempts reached, switching to fallback mode');
       this.startFallbackMode(joinPayload);
@@ -98,7 +113,7 @@ export class WSClient {
     this.botInterval = setInterval(() => {
       this.updateBots();
       this.emitFallbackState(joinPayload.playerId);
-    }, 1000 / 30);
+    }, 1000 / 60);
   }
 
   private generateBots(count: number): void {
@@ -380,6 +395,23 @@ export class WSClient {
     const handlers = this.handlers.get(type);
     if (handlers) {
       handlers.forEach((h) => h(msg));
+    }
+  }
+
+  public removeFallbackFood(foodId: string): void {
+    const idx = this.botFoods.findIndex(f => f.id === foodId);
+    if (idx !== -1) {
+      const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+      this.botFoods[idx] = {
+        id: `food_r_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        position: {
+          x: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
+          y: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
+        },
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: Math.random() * 4 + 4,
+        value: Math.floor(Math.random() * 3) + 1,
+      };
     }
   }
 

@@ -79,7 +79,7 @@ export default function GameScreen() {
 
       useGameStore.getState().setPlayers(remoteMap);
       useGameStore.getState().setFoods(payload.foods);
-      setPlayerCount(totalCount);
+      setPlayerCount(isOnline ? totalCount : totalCount + 1);
       setConnectionMode(isOnline ? 'online' : 'local');
 
       // Set engine mode
@@ -136,6 +136,8 @@ export default function GameScreen() {
       // Only used in fallback/offline mode (engine detects food collision locally)
       if (ws.fallbackMode) {
         setScore(newScore);
+        const lp = useGameStore.getState().localPlayer;
+        if (lp) setLength(lp.length);
         useGameStore.getState().updateLocalPlayer({ score: newScore });
       }
     };
@@ -164,6 +166,9 @@ export default function GameScreen() {
     };
 
     engine.onFoodEaten = (foodId) => {
+      if (ws.fallbackMode) {
+        ws.removeFallbackFood(foodId);
+      }
       ws.send({
         type: 'food_eaten',
         payload: { foodId, playerId: user.uid },

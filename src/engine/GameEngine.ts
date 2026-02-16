@@ -421,10 +421,13 @@ export class GameEngine {
       const pulse = 1 + Math.sin(Date.now() * 0.005 + food.position.x) * 0.15;
       const size = food.size * pulse;
 
-      // Glow
-      ctx.shadowColor = food.color;
-      ctx.shadowBlur = 12;
+      // Outer glow (cheap alternative to shadowBlur)
+      ctx.fillStyle = food.color + '30';
+      ctx.beginPath();
+      ctx.arc(food.position.x, food.position.y, size * 2, 0, Math.PI * 2);
+      ctx.fill();
 
+      // Main body
       ctx.fillStyle = food.color;
       ctx.beginPath();
       ctx.arc(food.position.x, food.position.y, size, 0, Math.PI * 2);
@@ -435,8 +438,6 @@ export class GameEngine {
       ctx.beginPath();
       ctx.arc(food.position.x - size * 0.2, food.position.y - size * 0.2, size * 0.35, 0, Math.PI * 2);
       ctx.fill();
-
-      ctx.shadowBlur = 0;
     });
   }
 
@@ -446,6 +447,9 @@ export class GameEngine {
 
     const segSize = this.config.segmentSize;
     const color = player.color;
+
+    // Reset shadow state (prevent leak from previous renderers)
+    ctx.shadowBlur = 0;
 
     // Body glow
     if (isLocal || player.boosting) {
