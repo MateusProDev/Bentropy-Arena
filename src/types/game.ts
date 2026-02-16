@@ -20,6 +20,8 @@ export interface Player {
   alive: boolean;
   boosting: boolean;
   lastUpdate: number;
+  activeAbility: DevilFruitAbility | null;
+  abilityEndTime: number;
 }
 
 export interface Food {
@@ -29,6 +31,125 @@ export interface Food {
   size: number;
   value: number;
 }
+
+// ============================================================
+// Devil Fruits (One Piece) - Special ability items
+// ============================================================
+
+export type DevilFruitAbility =
+  | 'resistance'
+  | 'invisibility'
+  | 'speed'
+  | 'phasing'
+  | 'magnet'
+  | 'fireboost'
+  | 'growth'
+  | 'freeze';
+
+export interface DevilFruitDef {
+  ability: DevilFruitAbility;
+  name: string;
+  japaneseName: string;
+  color: string;
+  glowColor: string;
+  duration: number;
+  description: string;
+  emoji: string;
+}
+
+export interface DevilFruit {
+  id: string;
+  position: Vector2D;
+  ability: DevilFruitAbility;
+  name: string;
+  color: string;
+  glowColor: string;
+  size: number;
+  emoji: string;
+}
+
+export const DEVIL_FRUITS: DevilFruitDef[] = [
+  {
+    ability: 'resistance',
+    name: 'Gomu Gomu no Mi',
+    japaneseName: '\u30B4\u30E0\u30B4\u30E0\u306E\u5B9F',
+    color: '#e74c3c',
+    glowColor: '#ff6b6b',
+    duration: 15,
+    description: 'Sobrevive 1 colis\u00E3o',
+    emoji: '\uD83D\uDEE1\uFE0F',
+  },
+  {
+    ability: 'invisibility',
+    name: 'Suke Suke no Mi',
+    japaneseName: '\u30B9\u30B1\u30B9\u30B1\u306E\u5B9F',
+    color: '#9b59b6',
+    glowColor: '#c39bd3',
+    duration: 10,
+    description: 'Invis\u00EDvel para inimigos',
+    emoji: '\uD83D\uDC7B',
+  },
+  {
+    ability: 'speed',
+    name: 'Pika Pika no Mi',
+    japaneseName: '\u30D4\u30AB\u30D4\u30AB\u306E\u5B9F',
+    color: '#f1c40f',
+    glowColor: '#f9e547',
+    duration: 8,
+    description: 'Velocidade da luz',
+    emoji: '\u26A1',
+  },
+  {
+    ability: 'phasing',
+    name: 'Bari Bari no Mi',
+    japaneseName: '\u30D0\u30EA\u30D0\u30EA\u306E\u5B9F',
+    color: '#2ecc71',
+    glowColor: '#58d68d',
+    duration: 8,
+    description: 'Atravessa cobras',
+    emoji: '\uD83C\uDF00',
+  },
+  {
+    ability: 'magnet',
+    name: 'Yami Yami no Mi',
+    japaneseName: '\u30E4\u30DF\u30E4\u30DF\u306E\u5B9F',
+    color: '#2c3e50',
+    glowColor: '#5d6d7e',
+    duration: 12,
+    description: 'Atrai comida pr\u00F3xima',
+    emoji: '\uD83D\uDD73\uFE0F',
+  },
+  {
+    ability: 'fireboost',
+    name: 'Mera Mera no Mi',
+    japaneseName: '\u30E1\u30E9\u30E1\u30E9\u306E\u5B9F',
+    color: '#e67e22',
+    glowColor: '#f39c12',
+    duration: 10,
+    description: 'Boost sem custo',
+    emoji: '\uD83D\uDD25',
+  },
+  {
+    ability: 'growth',
+    name: 'Magu Magu no Mi',
+    japaneseName: '\u30DE\u30B0\u30DE\u30B0\u306E\u5B9F',
+    color: '#c0392b',
+    glowColor: '#e74c3c',
+    duration: 0,
+    description: 'Crescimento +50',
+    emoji: '\uD83C\uDF0B',
+  },
+  {
+    ability: 'freeze',
+    name: 'Hie Hie no Mi',
+    japaneseName: '\u30D2\u30A8\u30D2\u30A8\u306E\u5B9F',
+    color: '#3498db',
+    glowColor: '#85c1e9',
+    duration: 8,
+    description: 'Invenc\u00EDvel',
+    emoji: '\u2744\uFE0F',
+  },
+];
 
 export interface GameState {
   players: Map<string, Player>;
@@ -73,7 +194,7 @@ export interface GameConfig {
 export const DEFAULT_CONFIG: GameConfig = {
   worldSize: 10000,
   maxPlayers: 30,
-  foodCount: 3000,
+  foodCount: 4000,
   baseSpeed: 4,
   boostSpeed: 8,
   boostCost: 0.3,
@@ -108,6 +229,7 @@ export type WSMessageType =
   | 'death'
   | 'kill'
   | 'food_eaten'
+  | 'devil_fruit_eaten'
   | 'chat'
   | 'ping'
   | 'pong';
@@ -134,6 +256,7 @@ export interface MovePayload {
 export interface StatePayload {
   players: Record<string, Player>;
   foods: Food[];
+  devilFruits?: DevilFruit[];
   tick: number;
 }
 

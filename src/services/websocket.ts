@@ -4,8 +4,8 @@
 // Falls back to local AI bots when WS server is unavailable
 // ============================================================
 
-import type { WSMessage, JoinPayload, Player, Food, Vector2D } from '../types/game';
-import { DEFAULT_CONFIG, SNAKE_COLORS } from '../types/game';
+import type { WSMessage, JoinPayload, Player, Food, DevilFruit, Vector2D } from '../types/game';
+import { DEFAULT_CONFIG, SNAKE_COLORS, DEVIL_FRUITS } from '../types/game';
 
 type MessageHandler = (msg: WSMessage) => void;
 
@@ -22,6 +22,7 @@ export class WSClient {
   // Bot simulation
   private bots: Map<string, Player> = new Map();
   private botFoods: Food[] = [];
+  private botDevilFruits: DevilFruit[] = [];
   private botInterval: ReturnType<typeof setInterval> | null = null;
   private localPlayerRef: Player | null = null;
 
@@ -109,6 +110,7 @@ export class WSClient {
     // Generate bots
     this.generateBots(10);
     this.generateFoods(DEFAULT_CONFIG.foodCount);
+    this.generateDevilFruits(10);
 
     // Simulation loop - 30fps
     this.botInterval = setInterval(() => {
@@ -163,9 +165,31 @@ export class WSClient {
         alive: true,
         boosting: false,
         lastUpdate: Date.now(),
+        activeAbility: null,
+        abilityEndTime: 0,
       };
 
       this.bots.set(bot.id, bot);
+    }
+  }
+
+  private generateDevilFruits(count: number): void {
+    this.botDevilFruits = [];
+    for (let i = 0; i < count; i++) {
+      const def = DEVIL_FRUITS[Math.floor(Math.random() * DEVIL_FRUITS.length)];
+      this.botDevilFruits.push({
+        id: `df_${Date.now()}_${i}`,
+        position: {
+          x: Math.random() * (DEFAULT_CONFIG.worldSize - 400) + 200,
+          y: Math.random() * (DEFAULT_CONFIG.worldSize - 400) + 200,
+        },
+        ability: def.ability,
+        name: def.name,
+        color: def.color,
+        glowColor: def.glowColor,
+        size: 14,
+        emoji: def.emoji,
+      });
     }
   }
 
@@ -271,7 +295,8 @@ export class WSClient {
                           (bot.length > 60 && Math.random() < 0.03);
       bot.boosting = !!shouldBoost;
       if (bot.boosting && bot.length > 8) {
-        bot.length -= DEFAULT_CONFIG.boostCost * 0.015;
+        bot.length -= 0.05;
+        bot.score = Math.max(0, bot.score - 0.05);
       }
 
       // Move (bots are slower than players)
@@ -307,13 +332,17 @@ export class WSClient {
 
       // Check bot collision with LOCAL PLAYER body
       if (!botDied && this.localPlayerRef && this.localPlayerRef.alive) {
-        for (let i = 1; i < this.localPlayerRef.segments.length; i++) {
-          const seg = this.localPlayerRef.segments[i];
-          const dx = newHead.x - seg.x;
-          const dy = newHead.y - seg.y;
-          if (dx * dx + dy * dy < DEFAULT_CONFIG.segmentSize * DEFAULT_CONFIG.segmentSize * 2.25) {
-            botDied = true;
-            break;
+        // Skip if player has phasing or invisibility
+        const pAbility = this.localPlayerRef.activeAbility;
+        if (pAbility !== 'phasing' && pAbility !== 'invisibility' && pAbility !== 'freeze') {
+          for (let i = 1; i < this.localPlayerRef.segments.length; i++) {
+            const seg = this.localPlayerRef.segments[i];
+            const dx = newHead.x - seg.x;
+            const dy = newHead.y - seg.y;
+            if (dx * dx + dy * dy < DEFAULT_CONFIG.segmentSize * DEFAULT_CONFIG.segmentSize * 2.25) {
+              botDied = true;
+              break;
+            }
           }
         }
       }
@@ -367,6 +396,36 @@ export class WSClient {
         }
       }
 
+      // Bot eats devil fruits
+      for (let i = this.botDevilFruits.length - 1; i >= 0; i--) {
+        const fruit = this.botDevilFruits[i];
+        const fdx = newHead.x - fruit.position.x;
+        const fdy = newHead.y - fruit.position.y;
+        if (fdx * fdx + fdy * fdy < 28 * 28) {
+          // Apply ability to bot
+          const def = DEVIL_FRUITS.find(d => d.ability === fruit.ability);
+          if (def) {
+            if (def.ability === 'growth') {
+              bot.length += 50;
+              bot.score += 50;
+            } else {
+              bot.activeAbility = def.ability;
+              bot.abilityEndTime = Date.now() + def.duration * 1000;
+            }
+          }
+          // Remove and respawn later
+          this.botDevilFruits.splice(i, 1);
+          setTimeout(() => this.spawnOneDevilFruit(), 15000 + Math.random() * 15000);
+          break;
+        }
+      }
+
+      // Expire bot abilities
+      if (bot.activeAbility && bot.abilityEndTime > 0 && Date.now() > bot.abilityEndTime) {
+        bot.activeAbility = null;
+        bot.abilityEndTime = 0;
+      }
+
       bot.lastUpdate = Date.now();
     });
 
@@ -393,6 +452,7 @@ export class WSClient {
       payload: {
         players,
         foods: this.botFoods,
+        devilFruits: this.botDevilFruits,
         tick: Date.now(),
       },
       timestamp: Date.now(),
@@ -457,6 +517,32 @@ export class WSClient {
           value: Math.floor(Math.random() * 2) + 2,
         });
       }
+    }
+  }
+
+  private spawnOneDevilFruit(): void {
+    const def = DEVIL_FRUITS[Math.floor(Math.random() * DEVIL_FRUITS.length)];
+    this.botDevilFruits.push({
+      id: `df_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      position: {
+        x: Math.random() * (DEFAULT_CONFIG.worldSize - 400) + 200,
+        y: Math.random() * (DEFAULT_CONFIG.worldSize - 400) + 200,
+      },
+      ability: def.ability,
+      name: def.name,
+      color: def.color,
+      glowColor: def.glowColor,
+      size: 14,
+      emoji: def.emoji,
+    });
+  }
+
+  public removeFallbackDevilFruit(fruitId: string): void {
+    const idx = this.botDevilFruits.findIndex(f => f.id === fruitId);
+    if (idx !== -1) {
+      this.botDevilFruits.splice(idx, 1);
+      // Respawn a new one after 15-30 seconds
+      setTimeout(() => this.spawnOneDevilFruit(), 15000 + Math.random() * 15000);
     }
   }
 

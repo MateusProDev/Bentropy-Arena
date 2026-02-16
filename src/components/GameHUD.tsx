@@ -1,4 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
+import type { DevilFruitAbility } from '../types/game';
+import { DEVIL_FRUITS } from '../types/game';
 
 interface LeaderboardPlayer {
   name: string;
@@ -15,6 +17,8 @@ interface GameHUDProps {
   connectionMode: 'online' | 'local';
   playerName: string;
   leaderboard: LeaderboardPlayer[];
+  activeAbility?: DevilFruitAbility | null;
+  abilityTimeLeft?: number;
   onBoostStart?: () => void;
   onBoostEnd?: () => void;
   onJoystickMove?: (dx: number, dy: number) => void;
@@ -28,6 +32,8 @@ export default function GameHUD({
   connectionMode,
   playerName,
   leaderboard,
+  activeAbility,
+  abilityTimeLeft,
   onBoostStart,
   onBoostEnd,
   onJoystickMove,
@@ -81,6 +87,36 @@ export default function GameHUD({
           <div className="glass px-3 py-1 text-xs text-white font-medium">{playerName}</div>
         </div>
       )}
+
+      {/* ======== Active Ability indicator — below score ======== */}
+      {activeAbility && (() => {
+        const def = DEVIL_FRUITS.find(d => d.ability === activeAbility);
+        if (!def) return null;
+        return (
+          <div
+            className="fixed z-40"
+            style={{ top: compact ? 34 : 58, left: compact ? 4 : 8 }}
+          >
+            <div
+              className="glass flex items-center gap-1.5 animate-pulse"
+              style={{
+                padding: compact ? '2px 8px' : '4px 12px',
+                borderLeft: `3px solid ${def.color}`,
+              }}
+            >
+              <span style={{ fontSize: compact ? 12 : 16 }}>{def.emoji}</span>
+              <div>
+                <div className="text-white font-bold" style={{ fontSize: compact ? 9 : 11 }}>
+                  {def.name}
+                </div>
+                <div className="text-gray-400" style={{ fontSize: compact ? 7 : 9 }}>
+                  {def.description} — {abilityTimeLeft ?? 0}s
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ======== Desktop-only: Leaderboard ======== */}
       {!isMobile && (

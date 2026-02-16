@@ -4,7 +4,8 @@ import { useAuthStore } from '../stores/authStore';
 import { GameEngine } from '../engine/GameEngine';
 import { getWSClient, resetWSClient } from '../services/websocket';
 import { updatePlayerScore } from '../services/leaderboard';
-import type { Player, WSMessage, StatePayload, DeathPayload } from '../types/game';
+import type { Player, WSMessage, StatePayload, DeathPayload, DevilFruitAbility } from '../types/game';
+import { DEVIL_FRUITS } from '../types/game';
 import GameHUD from '../components/GameHUD';
 import DeathModal from '../components/DeathModal';
 
@@ -24,6 +25,9 @@ export default function GameScreen() {
   const [ping, setPing] = useState(0);
   const [connectionMode, setConnectionMode] = useState<'online' | 'local'>('local');
   const [playerName, setPlayerName] = useState('');
+  const [activeAbility, setActiveAbility] = useState<DevilFruitAbility | null>(null);
+  const [abilityTimeLeft, setAbilityTimeLeft] = useState(0);
+  const abilityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Force fullscreen on game start (both desktop and mobile)
   useEffect(() => {
@@ -110,6 +114,9 @@ export default function GameScreen() {
 
       useGameStore.getState().setPlayers(remoteMap);
       useGameStore.getState().setFoods(payload.foods);
+      if (payload.devilFruits) {
+        useGameStore.getState().setDevilFruits(payload.devilFruits);
+      }
       setPlayerCount(isOnline ? totalCount : totalCount + 1);
       setConnectionMode(isOnline ? 'online' : 'local');
 
@@ -199,6 +206,70 @@ export default function GameScreen() {
       }
     };
 
+    engine.onDevilFruitEaten = (fruitId, ability) => {
+      if (ws.fallbackMode) {
+        ws.removeFallbackDevilFruit(fruitId);
+      }
+      ws.send({
+        type: 'devil_fruit_eaten',
+        payload: { fruitId, playerId: user.uid, ability },
+        timestamp: Date.now(),
+      });
+
+      // Activate ability on local player
+      const def = DEVIL_FRUITS.find(d => d.ability === ability);
+      if (!def) return;
+
+      const lp = useGameStore.getState().localPlayer;
+      if (!lp) return;
+
+      if (ability === 'growth') {
+        // Instant effect: +50 length
+        useGameStore.getState().updateLocalPlayer({
+          length: lp.length + 50,
+          score: lp.score + 50,
+        });
+        setLength(Math.floor(lp.length + 50));
+        setScore(Math.floor(lp.score + 50));
+      } else {
+        // Timed ability
+        useGameStore.getState().updateLocalPlayer({
+          activeAbility: ability,
+          abilityEndTime: Date.now() + def.duration * 1000,
+        });
+        setActiveAbility(ability);
+        setAbilityTimeLeft(def.duration);
+
+        // Clear any existing timer
+        if (abilityTimerRef.current) clearInterval(abilityTimerRef.current);
+
+        const endTime = Date.now() + def.duration * 1000;
+        abilityTimerRef.current = setInterval(() => {
+          const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+          setAbilityTimeLeft(remaining);
+          if (remaining <= 0) {
+            if (abilityTimerRef.current) clearInterval(abilityTimerRef.current);
+            setActiveAbility(null);
+            useGameStore.getState().updateLocalPlayer({
+              activeAbility: null,
+              abilityEndTime: 0,
+            });
+          }
+        }, 200);
+      }
+    };
+
+    engine.onAbilityExpired = () => {
+      // Called when resistance is consumed by a collision
+      setActiveAbility(null);
+      setAbilityTimeLeft(0);
+      if (abilityTimerRef.current) clearInterval(abilityTimerRef.current);
+      useGameStore.getState().updateLocalPlayer({
+        activeAbility: null,
+        abilityEndTime: 0,
+      });
+    };
+
     engine.onFoodEaten = (foodId) => {
       if (ws.fallbackMode) {
         ws.removeFallbackFood(foodId);
@@ -217,7 +288,7 @@ export default function GameScreen() {
     // Also keep WS client updated with local player ref (for bot-vs-player collision)
     const syncLoop = () => {
       const state = useGameStore.getState();
-      engine.updateState(state.localPlayer, state.players, state.foods);
+      engine.updateState(state.localPlayer, state.players, state.foods, state.devilFruits);
       ws.updateLocalPlayerRef(state.localPlayer);
       frameRef.current = requestAnimationFrame(syncLoop);
     };
@@ -243,6 +314,7 @@ export default function GameScreen() {
       resetWSClient();
       cancelAnimationFrame(frameRef.current);
       clearInterval(pingInterval);
+      if (abilityTimerRef.current) clearInterval(abilityTimerRef.current);
     };
   }, [gameSession]); // Re-run when game session changes (play again)
 
@@ -320,6 +392,8 @@ export default function GameScreen() {
           connectionMode={connectionMode}
           playerName={playerName}
           leaderboard={leaderboard}
+          activeAbility={activeAbility}
+          abilityTimeLeft={abilityTimeLeft}
           onBoostStart={handleBoostStart}
           onBoostEnd={handleBoostEnd}
           onJoystickMove={handleJoystickMove}

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Player, Food, GameConfig, GameScreen } from '../types/game';
+import type { Player, Food, DevilFruit, GameConfig, GameScreen } from '../types/game';
 import { DEFAULT_CONFIG, SNAKE_COLORS } from '../types/game';
 
 interface GameStore {
@@ -11,6 +11,7 @@ interface GameStore {
   localPlayer: Player | null;
   players: Map<string, Player>;
   foods: Food[];
+  devilFruits: DevilFruit[];
   config: GameConfig;
   worldSize: number;
   camera: { x: number; y: number; zoom: number };
@@ -30,6 +31,7 @@ interface GameStore {
   updateLocalPlayer: (updates: Partial<Player>) => void;
   setPlayers: (players: Map<string, Player>) => void;
   setFoods: (foods: Food[]) => void;
+  setDevilFruits: (fruits: DevilFruit[]) => void;
   updateCamera: (x: number, y: number) => void;
   setPlaying: (playing: boolean) => void;
   setDeath: (info: { score: number; length: number; killedBy: string | null } | null) => void;
@@ -43,6 +45,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   localPlayer: null,
   players: new Map(),
   foods: [],
+  devilFruits: [],
   config: DEFAULT_CONFIG,
   worldSize: DEFAULT_CONFIG.worldSize,
   camera: { x: 0, y: 0, zoom: 1 },
@@ -79,6 +82,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       alive: true,
       boosting: false,
       lastUpdate: Date.now(),
+      activeAbility: null,
+      abilityEndTime: 0,
     };
 
     set({ localPlayer: player, isPlaying: true, deathInfo: null, gameSession: get().gameSession + 1 });
@@ -91,6 +96,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   setPlayers: (players) => set({ players }),
   setFoods: (foods) => set({ foods }),
+  setDevilFruits: (fruits) => set({ devilFruits: fruits }),
 
   updateCamera: (x, y) =>
     set({ camera: { ...get().camera, x, y } }),
@@ -104,6 +110,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       localPlayer: null,
       players: new Map(),
       foods: [],
+      devilFruits: [],
       isPlaying: false,
       deathInfo: null,
       camera: { x: 0, y: 0, zoom: 1 },
