@@ -254,6 +254,14 @@ export default function GameScreen() {
     return entries.sort((a, b) => b.score - a.score);
   }, [localPlayer, remotePlayers, score]);
 
+  const handleBoostStart = useCallback(() => {
+    engineRef.current?.setMobileBoosting(true);
+  }, []);
+
+  const handleBoostEnd = useCallback(() => {
+    engineRef.current?.setMobileBoosting(false);
+  }, []);
+
   return (
     <div className="game-canvas-container">
       <canvas
@@ -272,6 +280,8 @@ export default function GameScreen() {
           connectionMode={connectionMode}
           playerName={playerName}
           leaderboard={leaderboard}
+          onBoostStart={handleBoostStart}
+          onBoostEnd={handleBoostEnd}
         />
       )}
 

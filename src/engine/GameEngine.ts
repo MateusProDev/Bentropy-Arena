@@ -79,6 +79,12 @@ export class GameEngine {
     this.gridPattern = this.ctx.createPattern(patternCanvas, 'repeat');
   }
 
+  // Mobile boost control (set by external UI button)
+  public setMobileBoosting(boosting: boolean): void {
+    this.isBoosting = boosting;
+    this.onBoost?.(boosting);
+  }
+
   private setupInput(): void {
     this.canvas.addEventListener('mousemove', (e) => {
       this.mousePos = { x: e.clientX, y: e.clientY };
@@ -94,7 +100,7 @@ export class GameEngine {
       this.onBoost?.(false);
     });
 
-    // Touch support
+    // Touch support — touch ONLY controls direction, NOT boost
     this.canvas.addEventListener('touchmove', (e) => {
       e.preventDefault();
       const touch = e.touches[0];
@@ -105,13 +111,11 @@ export class GameEngine {
       e.preventDefault();
       const touch = e.touches[0];
       this.mousePos = { x: touch.clientX, y: touch.clientY };
-      this.isBoosting = true;
-      this.onBoost?.(true);
+      // Do NOT activate boost on touch — there's a dedicated boost button
     }, { passive: false });
 
     this.canvas.addEventListener('touchend', () => {
-      this.isBoosting = false;
-      this.onBoost?.(false);
+      // Do NOT deactivate boost on touchend — managed by the dedicated button
     });
   }
 
