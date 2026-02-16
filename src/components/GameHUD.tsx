@@ -1,3 +1,10 @@
+interface LeaderboardPlayer {
+  name: string;
+  score: number;
+  color: string;
+  isLocal: boolean;
+}
+
 interface GameHUDProps {
   score: number;
   length: number;
@@ -5,6 +12,7 @@ interface GameHUDProps {
   ping: number;
   connectionMode: 'online' | 'local';
   playerName: string;
+  leaderboard: LeaderboardPlayer[];
 }
 
 export default function GameHUD({
@@ -14,6 +22,7 @@ export default function GameHUD({
   ping,
   connectionMode,
   playerName,
+  leaderboard,
 }: GameHUDProps) {
   return (
     <>
@@ -31,15 +40,34 @@ export default function GameHUD({
         </div>
       </div>
 
-      {/* Top-right: Connection info */}
-      <div className="fixed top-4 right-4 z-40">
-        <div className="glass px-4 py-2 flex items-center gap-3 text-xs">
-          <div className={`w-2 h-2 rounded-full ${connectionMode === 'online' ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
-          <span className="text-gray-400">
-            {connectionMode === 'online' ? 'Online' : 'Local + Bots'}
-          </span>
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-400">{ping}ms</span>
+      {/* Top-right: In-game leaderboard */}
+      <div className="fixed top-4 right-4 z-40 w-48">
+        <div className="glass px-3 py-2">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">🏆 Top</span>
+            <div className="flex items-center gap-2 text-[10px]">
+              <div className={`w-1.5 h-1.5 rounded-full ${connectionMode === 'online' ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
+              <span className="text-gray-500">{ping}ms</span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {leaderboard.slice(0, 8).map((p, i) => (
+              <div
+                key={p.name + i}
+                className={`flex items-center gap-2 text-xs py-0.5 px-1 rounded ${p.isLocal ? 'bg-white/10' : ''}`}
+              >
+                <span className="text-gray-500 w-4 text-right font-mono text-[10px]">{i + 1}</span>
+                <div
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: p.color }}
+                />
+                <span className={`truncate flex-1 ${p.isLocal ? 'text-white font-semibold' : 'text-gray-400'}`}>
+                  {p.name}
+                </span>
+                <span className="text-gray-500 tabular-nums text-[10px]">{p.score.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

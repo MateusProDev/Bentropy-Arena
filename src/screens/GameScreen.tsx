@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { GameEngine } from '../engine/GameEngine';
@@ -224,6 +224,35 @@ export default function GameScreen() {
   }, []);
 
   const localPlayer = useGameStore((s) => s.localPlayer);
+  const remotePlayers = useGameStore((s) => s.players);
+
+  // Build live leaderboard from all players
+  const leaderboard = useMemo(() => {
+    const entries: { name: string; score: number; color: string; isLocal: boolean }[] = [];
+
+    // Add local player
+    if (localPlayer?.alive) {
+      entries.push({
+        name: localPlayer.name,
+        score: Math.floor(score),
+        color: localPlayer.color,
+        isLocal: true,
+      });
+    }
+
+    // Add remote/bot players
+    remotePlayers.forEach((p) => {
+      if (!p.alive) return;
+      entries.push({
+        name: p.name,
+        score: Math.floor(p.score),
+        color: p.color,
+        isLocal: false,
+      });
+    });
+
+    return entries.sort((a, b) => b.score - a.score);
+  }, [localPlayer, remotePlayers, score]);
 
   return (
     <div className="game-canvas-container">
@@ -242,6 +271,7 @@ export default function GameScreen() {
           ping={ping}
           connectionMode={connectionMode}
           playerName={playerName}
+          leaderboard={leaderboard}
         />
       )}
 

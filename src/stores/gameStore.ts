@@ -63,7 +63,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     const segments: { x: number; y: number }[] = [];
     for (let i = 0; i < 10; i++) {
-      segments.push({ x: startX - i * 12, y: startY });
+      segments.push({ x: startX - i * 10, y: startY });
     }
 
     const player: Player = {

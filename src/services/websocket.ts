@@ -106,7 +106,7 @@ export class WSClient {
     console.log('[WS] Starting local fallback mode with AI bots');
 
     // Generate bots
-    this.generateBots(8);
+    this.generateBots(15);
     this.generateFoods(DEFAULT_CONFIG.foodCount);
 
     // Simulation loop - 30fps
@@ -121,32 +121,43 @@ export class WSClient {
       'Cobra_AI', 'Python_Bot', 'Serpente_X', 'Viper_Pro',
       'Mamba_Zero', 'Anaconda_3', 'King_Snake', 'Naga_Elite',
       'SlitherKing', 'VenomByte', 'CoilMaster', 'FangStrike',
+      'ToxicFang', 'ShadowCoil', 'IronScale', 'NightViper',
+      'BlazeTail', 'StormFang', 'CyberCobra', 'GhostNaga',
     ];
 
+    const existingCount = this.bots.size;
+
     for (let i = 0; i < count; i++) {
-      const color = SNAKE_COLORS[i % SNAKE_COLORS.length];
-      const startX = Math.random() * (DEFAULT_CONFIG.worldSize - 600) + 300;
-      const startY = Math.random() * (DEFAULT_CONFIG.worldSize - 600) + 300;
+      const idx = existingCount + i;
+      const color = SNAKE_COLORS[idx % SNAKE_COLORS.length];
+      const startX = Math.random() * (DEFAULT_CONFIG.worldSize - 1000) + 500;
+      const startY = Math.random() * (DEFAULT_CONFIG.worldSize - 1000) + 500;
       const angle = Math.random() * Math.PI * 2;
 
+      // Varied sizes: some small (15), some medium (30-60), a few big (80-120)
+      const sizeRoll = Math.random();
+      let baseLength: number;
+      if (sizeRoll < 0.4) baseLength = Math.floor(Math.random() * 15) + 15;
+      else if (sizeRoll < 0.8) baseLength = Math.floor(Math.random() * 30) + 30;
+      else baseLength = Math.floor(Math.random() * 40) + 80;
+
       const segments: Vector2D[] = [];
-      const baseLength = Math.floor(Math.random() * 20) + 10;
       for (let j = 0; j < baseLength; j++) {
         segments.push({
-          x: startX - Math.cos(angle) * j * 12,
-          y: startY - Math.sin(angle) * j * 12,
+          x: startX - Math.cos(angle) * j * 10,
+          y: startY - Math.sin(angle) * j * 10,
         });
       }
 
       const bot: Player = {
-        id: `bot_${i}`,
-        name: botNames[i % botNames.length],
+        id: `bot_${Date.now()}_${idx}`,
+        name: botNames[idx % botNames.length],
         photoURL: null,
         color,
         segments,
         direction: { x: Math.cos(angle), y: Math.sin(angle) },
         speed: DEFAULT_CONFIG.baseSpeed,
-        score: Math.floor(Math.random() * 100),
+        score: Math.floor(baseLength * 3 + Math.random() * 50),
         length: baseLength,
         alive: true,
         boosting: false,
@@ -181,49 +192,57 @@ export class WSClient {
     this.bots.forEach((bot) => {
       if (!bot.alive) return;
 
-      // Simple AI: Move towards nearest food, with some randomness
       const head = bot.segments[0];
+
+      // --- Find nearest food (wider range for bigger bots) ---
       let nearestFood: Food | null = null;
-      let nearestDist = Infinity;
+      let nearestFoodDist = Infinity;
+      const seekRange = 300 + bot.length * 3; // bigger snakes see farther
 
       for (const food of this.botFoods) {
         const dx = food.position.x - head.x;
         const dy = food.position.y - head.y;
         const dist = dx * dx + dy * dy;
-        if (dist < nearestDist) {
-          nearestDist = dist;
+        if (dist < nearestFoodDist) {
+          nearestFoodDist = dist;
           nearestFood = food;
         }
       }
 
-      // Avoid other snakes (including player)
+      // --- Avoid other snakes ---
       let avoidX = 0;
       let avoidY = 0;
+      const avoidRadius = 60 + bot.length * 0.5;
       this.bots.forEach((other) => {
         if (other.id === bot.id || !other.alive) return;
-        for (let i = 0; i < Math.min(other.segments.length, 15); i++) {
+        const checkSegs = Math.min(other.segments.length, 20);
+        for (let i = 0; i < checkSegs; i++) {
           const seg = other.segments[i];
           const dx = head.x - seg.x;
           const dy = head.y - seg.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 80 && dist > 0) {
-            avoidX += (dx / dist) * (80 - dist) * 0.01;
-            avoidY += (dy / dist) * (80 - dist) * 0.01;
+          if (dist < avoidRadius && dist > 0) {
+            const force = (avoidRadius - dist) / avoidRadius * 0.02;
+            avoidX += (dx / dist) * force;
+            avoidY += (dy / dist) * force;
           }
         }
       });
 
-      // Random direction change
-      if (Math.random() < 0.02) {
+      // --- Decide direction ---
+      if (Math.random() < 0.015) {
+        // Random exploration
         const angle = Math.random() * Math.PI * 2;
         bot.direction = { x: Math.cos(angle), y: Math.sin(angle) };
-      } else if (nearestFood && nearestDist < 200 * 200) {
+      } else if (nearestFood && nearestFoodDist < seekRange * seekRange) {
+        // Chase food
         const dx = nearestFood.position.x - head.x;
         const dy = nearestFood.position.y - head.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > 0) {
-          bot.direction.x += (dx / dist - bot.direction.x) * 0.1;
-          bot.direction.y += (dy / dist - bot.direction.y) * 0.1;
+          const turnSpeed = 0.12;
+          bot.direction.x += (dx / dist - bot.direction.x) * turnSpeed;
+          bot.direction.y += (dy / dist - bot.direction.y) * turnSpeed;
         }
       }
 
@@ -231,18 +250,27 @@ export class WSClient {
       bot.direction.x += avoidX;
       bot.direction.y += avoidY;
 
-      // Avoid walls
-      const margin = 150;
-      if (head.x < margin) bot.direction.x += 0.1;
-      if (head.x > DEFAULT_CONFIG.worldSize - margin) bot.direction.x -= 0.1;
-      if (head.y < margin) bot.direction.y += 0.1;
-      if (head.y > DEFAULT_CONFIG.worldSize - margin) bot.direction.y -= 0.1;
+      // Avoid walls (stronger push for bigger map)
+      const wallMargin = 300;
+      const wallForce = 0.08;
+      if (head.x < wallMargin) bot.direction.x += wallForce * (1 - head.x / wallMargin);
+      if (head.x > DEFAULT_CONFIG.worldSize - wallMargin) bot.direction.x -= wallForce * (1 - (DEFAULT_CONFIG.worldSize - head.x) / wallMargin);
+      if (head.y < wallMargin) bot.direction.y += wallForce * (1 - head.y / wallMargin);
+      if (head.y > DEFAULT_CONFIG.worldSize - wallMargin) bot.direction.y -= wallForce * (1 - (DEFAULT_CONFIG.worldSize - head.y) / wallMargin);
 
       // Normalize direction
       const dl = Math.sqrt(bot.direction.x ** 2 + bot.direction.y ** 2);
       if (dl > 0) {
         bot.direction.x /= dl;
         bot.direction.y /= dl;
+      }
+
+      // --- Boost logic: boost when chasing close food or when big ---
+      const shouldBoost = (nearestFood && nearestFoodDist < 150 * 150 && bot.length > 20) ||
+                          (bot.length > 60 && Math.random() < 0.03);
+      bot.boosting = !!shouldBoost;
+      if (bot.boosting && bot.length > 8) {
+        bot.length -= DEFAULT_CONFIG.boostCost * 0.015;
       }
 
       // Move
@@ -307,15 +335,15 @@ export class WSClient {
         const food = this.botFoods[i];
         const dx = newHead.x - food.position.x;
         const dy = newHead.y - food.position.y;
-        if (dx * dx + dy * dy < 400) {
+        if (dx * dx + dy * dy < 500) {
           bot.score += food.value;
-          bot.length += 1;
+          bot.length += DEFAULT_CONFIG.growthRate;
           // Replace food
           this.botFoods[i] = {
             id: `food_${Date.now()}_${i}`,
             position: {
-              x: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
-              y: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
+              x: Math.random() * (DEFAULT_CONFIG.worldSize - 200) + 100,
+              y: Math.random() * (DEFAULT_CONFIG.worldSize - 200) + 100,
             },
             color: food.color,
             size: Math.random() * 4 + 4,
@@ -325,8 +353,6 @@ export class WSClient {
         }
       }
 
-      // Random boost
-      bot.boosting = Math.random() < 0.01;
       bot.lastUpdate = Date.now();
     });
 
@@ -334,10 +360,11 @@ export class WSClient {
     deadBots.forEach((id) => {
       this.bots.delete(id);
     });
-    // Keep bot count at 8
+    // Keep bot count at 15
     const aliveBots = Array.from(this.bots.values()).filter(b => b.alive).length;
-    if (aliveBots < 8 && Math.random() < 0.05) {
-      this.generateBots(1);
+    const botsNeeded = 15 - aliveBots;
+    if (botsNeeded > 0 && Math.random() < 0.1) {
+      this.generateBots(Math.min(botsNeeded, 2));
     }
   }
 

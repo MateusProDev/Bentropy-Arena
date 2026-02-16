@@ -71,16 +71,16 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  worldSize: 4000,
-  maxPlayers: 20,
-  foodCount: 500,
-  baseSpeed: 3,
-  boostSpeed: 6,
-  boostCost: 0.5,
-  growthRate: 1,
+  worldSize: 10000,
+  maxPlayers: 30,
+  foodCount: 1500,
+  baseSpeed: 4,
+  boostSpeed: 8,
+  boostCost: 0.3,
+  growthRate: 2,
   tickRate: 60,
-  segmentSize: 12,
-  foodSize: 8,
+  segmentSize: 10,
+  foodSize: 6,
 };
 
 export const SNAKE_COLORS = [
