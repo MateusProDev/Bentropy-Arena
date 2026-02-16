@@ -25,6 +25,32 @@ export default function GameScreen() {
   const [connectionMode, setConnectionMode] = useState<'online' | 'local'>('local');
   const [playerName, setPlayerName] = useState('');
 
+  // Force landscape + fullscreen on mobile
+  useEffect(() => {
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (!isMobile) return;
+
+    const goFullscreen = async () => {
+      try {
+        if (!document.fullscreenElement) {
+          await document.documentElement.requestFullscreen();
+        }
+      } catch { /* not available */ }
+      try {
+        await (screen.orientation as any).lock('landscape');
+      } catch { /* not supported */ }
+    };
+
+    // First touch activates fullscreen (requires user gesture)
+    window.addEventListener('touchstart', goFullscreen, { once: true });
+
+    return () => {
+      window.removeEventListener('touchstart', goFullscreen);
+      try { (screen.orientation as any).unlock(); } catch {}
+      try { if (document.fullscreenElement) document.exitFullscreen(); } catch {}
+    };
+  }, [gameSession]);
+
   // Initialize engine and WebSocket on each game session
   useEffect(() => {
     const store = useGameStore.getState();
@@ -262,6 +288,10 @@ export default function GameScreen() {
     engineRef.current?.setMobileBoosting(false);
   }, []);
 
+  const handleJoystickMove = useCallback((dx: number, dy: number) => {
+    engineRef.current?.setJoystickDirection(dx, dy);
+  }, []);
+
   return (
     <div className="game-canvas-container">
       <canvas
@@ -282,6 +312,7 @@ export default function GameScreen() {
           leaderboard={leaderboard}
           onBoostStart={handleBoostStart}
           onBoostEnd={handleBoostEnd}
+          onJoystickMove={handleJoystickMove}
         />
       )}
 

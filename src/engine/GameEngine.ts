@@ -16,6 +16,7 @@ export class GameEngine {
   private isBoosting = false;
   private particles: Particle[] = [];
   private gridPattern: CanvasPattern | null = null;
+  private joystickDirection: Vector2D | null = null;
 
   // Online mode: when true, collision detection is server-authoritative
   public isOnlineMode = false;
@@ -85,6 +86,14 @@ export class GameEngine {
     this.onBoost?.(boosting);
   }
 
+  // Mobile joystick direction (set by external UI joystick)
+  public setJoystickDirection(dx: number, dy: number): void {
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 0.1) {
+      this.joystickDirection = { x: dx / dist, y: dy / dist };
+    }
+  }
+
   private setupInput(): void {
     this.canvas.addEventListener('mousemove', (e) => {
       this.mousePos = { x: e.clientX, y: e.clientY };
@@ -146,15 +155,19 @@ export class GameEngine {
   private update(): void {
     if (!this.localPlayer?.alive) return;
 
-    // Calculate direction from mouse position to center of screen
-    const centerX = this.canvas.width / 2;
-    const centerY = this.canvas.height / 2;
-    const dx = this.mousePos.x - centerX;
-    const dy = this.mousePos.y - centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    // Calculate direction from joystick (mobile) or mouse position (desktop)
+    if (this.joystickDirection) {
+      this.targetDirection = { ...this.joystickDirection };
+    } else {
+      const centerX = this.canvas.width / 2;
+      const centerY = this.canvas.height / 2;
+      const dx = this.mousePos.x - centerX;
+      const dy = this.mousePos.y - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist > 5) {
-      this.targetDirection = { x: dx / dist, y: dy / dist };
+      if (dist > 5) {
+        this.targetDirection = { x: dx / dist, y: dy / dist };
+      }
     }
 
     // Smooth direction interpolation
@@ -259,7 +272,7 @@ export class GameEngine {
       if (otherHead) {
         const dhx = head.x - otherHead.x;
         const dhy = head.y - otherHead.y;
-        if (Math.sqrt(dhx * dhx + dhy * dhy) < collisionRadius * 1.8) {
+        if (Math.sqrt(dhx * dhx + dhy * dhy) < collisionRadius * 1.3) {
           this.localPlayer!.alive = false;
           this.killedByName = player.name;
           this.screenShake = 15;
@@ -275,7 +288,7 @@ export class GameEngine {
         const dy = head.y - seg.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist < collisionRadius * 1.5) {
+        if (dist < collisionRadius * 1.0) {
           this.localPlayer!.alive = false;
           this.killedByName = player.name;
           this.screenShake = 15;
@@ -286,15 +299,15 @@ export class GameEngine {
       }
     });
 
-    // Self-collision (only check segments far from head)
-    if (this.localPlayer.segments.length > 30) {
-      for (let i = 20; i < this.localPlayer.segments.length; i++) {
+    // Self-collision (only check segments far from head to avoid false positives on turns)
+    if (this.localPlayer.segments.length > 60) {
+      for (let i = 50; i < this.localPlayer.segments.length; i++) {
         const seg = this.localPlayer.segments[i];
         const dx = head.x - seg.x;
         const dy = head.y - seg.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist < collisionRadius * 0.8) {
+        if (dist < collisionRadius * 0.4) {
           this.localPlayer.alive = false;
           this.screenShake = 15;
           this.spawnDeathParticles(head.x, head.y, this.localPlayer.color);
@@ -602,11 +615,12 @@ export class GameEngine {
     ctx.fillText(`${Math.floor(player.score)}`, head.x, y - 16);
   }
 
-  private renderMinimap(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    const mmSize = 200;
-    const mmMargin = 16;
+  private renderMinimap(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
+    const isMobile = w < 768;
+    const mmSize = isMobile ? 90 : 140;
+    const mmMargin = isMobile ? 8 : 14;
     const mmX = w - mmSize - mmMargin;
-    const mmY = h - mmSize - mmMargin;
+    const mmY = mmMargin;
     const scale = mmSize / this.config.worldSize;
 
     // Background
@@ -614,18 +628,18 @@ export class GameEngine {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(mmX, mmY, mmSize, mmSize, 8);
+    ctx.roundRect(mmX, mmY, mmSize, mmSize, isMobile ? 4 : 8);
     ctx.fill();
     ctx.stroke();
 
     // Border danger zone indicators
     ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = isMobile ? 1 : 2;
     ctx.strokeRect(mmX + 2, mmY + 2, mmSize - 4, mmSize - 4);
 
     // Food clusters (just a few dots for ambience)
     ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
-    for (let i = 0; i < this.foods.length; i += 15) {
+    for (let i = 0; i < this.foods.length; i += 30) {
       const f = this.foods[i];
       if (!f) continue;
       ctx.fillRect(

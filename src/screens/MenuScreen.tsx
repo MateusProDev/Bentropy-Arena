@@ -19,8 +19,14 @@ export default function MenuScreen() {
     }
   }, [user]);
 
-  const handlePlay = () => {
+  const handlePlay = async () => {
     if (!user) return;
+    // Try fullscreen + landscape on mobile (requires user gesture from button tap)
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (isMobile) {
+      try { await document.documentElement.requestFullscreen(); } catch {}
+      try { await (screen.orientation as any).lock('landscape'); } catch {}
+    }
     initLocalPlayer(user.uid, playerName || user.displayName || 'Player', user.photoURL, selectedColor);
     setScreen('game');
   };

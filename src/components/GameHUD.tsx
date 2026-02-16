@@ -1,3 +1,5 @@
+import { useRef, useState, useEffect, useCallback } from 'react';
+
 interface LeaderboardPlayer {
   name: string;
   score: number;
@@ -15,6 +17,7 @@ interface GameHUDProps {
   leaderboard: LeaderboardPlayer[];
   onBoostStart?: () => void;
   onBoostEnd?: () => void;
+  onJoystickMove?: (dx: number, dy: number) => void;
 }
 
 export default function GameHUD({
@@ -27,6 +30,7 @@ export default function GameHUD({
   leaderboard,
   onBoostStart,
   onBoostEnd,
+  onJoystickMove,
 }: GameHUDProps) {
   return (
     <>
@@ -44,31 +48,28 @@ export default function GameHUD({
         </div>
       </div>
 
-      {/* Top-right: Leaderboard — hidden on very small screens, compact on mobile */}
-      <div className="fixed top-2 right-2 sm:top-4 sm:right-4 z-40 w-36 sm:w-48 hidden xs:block">
-        <div className="glass px-2 py-1.5 sm:px-3 sm:py-2">
-          <div className="flex items-center justify-between mb-1 sm:mb-2">
-            <span className="text-[9px] sm:text-xs font-bold text-gray-300 uppercase tracking-wider">🏆 Top</span>
-            <div className="flex items-center gap-1.5 text-[8px] sm:text-[10px]">
+      {/* Desktop only: Leaderboard (offset down for minimap above it) */}
+      <div className="fixed top-[170px] right-4 z-40 w-48 hidden sm:block">
+        <div className="glass px-3 py-2">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">🏆 Top</span>
+            <div className="flex items-center gap-1.5 text-[10px]">
               <div className={`w-1.5 h-1.5 rounded-full ${connectionMode === 'online' ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
               <span className="text-gray-500">{ping}ms</span>
             </div>
           </div>
           <div className="flex flex-col gap-0.5">
-            {leaderboard.slice(0, 5).map((p, i) => (
+            {leaderboard.slice(0, 8).map((p, i) => (
               <div
                 key={p.name + i}
-                className={`flex items-center gap-1 sm:gap-2 text-[10px] sm:text-xs py-0.5 px-1 rounded ${p.isLocal ? 'bg-white/10' : ''}`}
+                className={`flex items-center gap-2 text-xs py-0.5 px-1 rounded ${p.isLocal ? 'bg-white/10' : ''}`}
               >
-                <span className="text-gray-500 w-3 sm:w-4 text-right font-mono text-[9px] sm:text-[10px]">{i + 1}</span>
-                <div
-                  className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: p.color }}
-                />
+                <span className="text-gray-500 w-4 text-right font-mono text-[10px]">{i + 1}</span>
+                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
                 <span className={`truncate flex-1 ${p.isLocal ? 'text-white font-semibold' : 'text-gray-400'}`}>
                   {p.name}
                 </span>
-                <span className="text-gray-500 tabular-nums text-[9px] sm:text-[10px]">{p.score.toLocaleString()}</span>
+                <span className="text-gray-500 tabular-nums text-[10px]">{p.score.toLocaleString()}</span>
               </div>
             ))}
           </div>
@@ -93,11 +94,11 @@ export default function GameHUD({
       {/* =========================================
           MOBILE: Boost button (bottom-right)
           ========================================= */}
-      <div className="fixed bottom-6 right-6 z-50 sm:hidden">
+      <div className="fixed bottom-8 right-6 z-50 sm:hidden">
         <button
-          className="w-20 h-20 rounded-full bg-gradient-to-br from-orange-500 to-red-600 
+          className="w-[70px] h-[70px] rounded-full bg-gradient-to-br from-orange-500 to-red-600 
                      flex items-center justify-center shadow-lg shadow-orange-500/30
-                     active:scale-90 active:shadow-orange-500/50 transition-transform
+                     active:scale-90 transition-transform
                      border-2 border-orange-400/50 select-none touch-none"
           onTouchStart={(e) => {
             e.preventDefault();
@@ -116,15 +117,120 @@ export default function GameHUD({
         >
           <span className="text-white text-2xl font-black pointer-events-none">🔥</span>
         </button>
-        <span className="block text-center text-[9px] text-gray-400 mt-1 pointer-events-none">BOOST</span>
+        <span className="block text-center text-[8px] text-gray-400 mt-1 pointer-events-none">BOOST</span>
       </div>
 
-      {/* MOBILE: Direction hint (bottom-left) */}
-      <div className="fixed bottom-6 left-4 z-40 sm:hidden">
-        <div className="glass px-3 py-1.5 text-[10px] text-gray-500">
-          👆 Toque na tela para direcionar
-        </div>
+      {/* =========================================
+          MOBILE: Virtual Joystick (bottom-left)
+          ========================================= */}
+      <div className="fixed bottom-4 left-4 z-50 sm:hidden">
+        <VirtualJoystick onMove={onJoystickMove} />
       </div>
     </>
+  );
+}
+
+// ============================================
+// Virtual Joystick Component (PS2-style)
+// ============================================
+
+function VirtualJoystick({ onMove }: { onMove?: (dx: number, dy: number) => void }) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const [thumbPos, setThumbPos] = useState({ x: 0, y: 0 });
+  const [active, setActive] = useState(false);
+  const touchIdRef = useRef<number | null>(null);
+  const onMoveRef = useRef(onMove);
+  onMoveRef.current = onMove;
+
+  const updatePosition = useCallback((clientX: number, clientY: number) => {
+    if (!outerRef.current) return;
+    const rect = outerRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const maxRadius = rect.width / 2 - 14;
+
+    let dx = clientX - centerX;
+    let dy = clientY - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > maxRadius) {
+      dx = (dx / dist) * maxRadius;
+      dy = (dy / dist) * maxRadius;
+    }
+
+    setThumbPos({ x: dx, y: dy });
+
+    if (dist > 5) {
+      onMoveRef.current?.(dx / dist, dy / dist);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleTouchMove = (e: TouchEvent) => {
+      if (touchIdRef.current === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === touchIdRef.current) {
+          updatePosition(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
+          e.preventDefault();
+          break;
+        }
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (touchIdRef.current === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === touchIdRef.current) {
+          touchIdRef.current = null;
+          setThumbPos({ x: 0, y: 0 });
+          setActive(false);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd);
+    window.addEventListener('touchcancel', handleTouchEnd);
+
+    return () => {
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('touchcancel', handleTouchEnd);
+    };
+  }, [updatePosition]);
+
+  return (
+    <div
+      ref={outerRef}
+      className="w-[120px] h-[120px] rounded-full bg-white/[0.07] border-2 border-white/[0.15] relative touch-none select-none"
+      onTouchStart={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const touch = e.touches[0];
+        touchIdRef.current = touch.identifier;
+        setActive(true);
+        updatePosition(touch.clientX, touch.clientY);
+      }}
+    >
+      {/* Cross-hairs */}
+      <div className="absolute top-1/2 left-3 right-3 h-px bg-white/10 -translate-y-1/2" />
+      <div className="absolute left-1/2 top-3 bottom-3 w-px bg-white/10 -translate-x-1/2" />
+
+      {/* Thumb */}
+      <div
+        className={`w-11 h-11 rounded-full absolute top-1/2 left-1/2 pointer-events-none transition-colors duration-75
+          ${active ? 'bg-white/30 shadow-lg shadow-emerald-500/20' : 'bg-white/15'}`}
+        style={{
+          transform: `translate(calc(-50% + ${thumbPos.x}px), calc(-50% + ${thumbPos.y}px))`,
+        }}
+      />
+
+      {/* Direction arrows */}
+      <span className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] text-white/20 pointer-events-none">▲</span>
+      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[8px] text-white/20 pointer-events-none">▼</span>
+      <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[8px] text-white/20 pointer-events-none">◀</span>
+      <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[8px] text-white/20 pointer-events-none">▶</span>
+    </div>
   );
 }

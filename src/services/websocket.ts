@@ -106,7 +106,7 @@ export class WSClient {
     console.log('[WS] Starting local fallback mode with AI bots');
 
     // Generate bots
-    this.generateBots(15);
+    this.generateBots(10);
     this.generateFoods(DEFAULT_CONFIG.foodCount);
 
     // Simulation loop - 30fps
@@ -273,8 +273,8 @@ export class WSClient {
         bot.length -= DEFAULT_CONFIG.boostCost * 0.015;
       }
 
-      // Move
-      const speed = bot.boosting ? DEFAULT_CONFIG.boostSpeed : DEFAULT_CONFIG.baseSpeed;
+      // Move (bots are slower than players)
+      const speed = (bot.boosting ? DEFAULT_CONFIG.boostSpeed : DEFAULT_CONFIG.baseSpeed) * 0.6;
       const newHead = {
         x: head.x + bot.direction.x * speed,
         y: head.y + bot.direction.y * speed,
@@ -362,7 +362,7 @@ export class WSClient {
     });
     // Keep bot count at 15
     const aliveBots = Array.from(this.bots.values()).filter(b => b.alive).length;
-    const botsNeeded = 15 - aliveBots;
+    const botsNeeded = 10 - aliveBots;
     if (botsNeeded > 0 && Math.random() < 0.1) {
       this.generateBots(Math.min(botsNeeded, 2));
     }
