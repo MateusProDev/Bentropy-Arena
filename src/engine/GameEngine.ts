@@ -17,6 +17,8 @@ export class GameEngine {
   private particles: Particle[] = [];
   private gridPattern: CanvasPattern | null = null;
   private joystickDirection: Vector2D | null = null;
+  private zoom = 1;
+  private targetZoom = 1;
 
   // Online mode: when true, collision detection is server-authoritative
   public isOnlineMode = false;
@@ -222,9 +224,14 @@ export class GameEngine {
       this.checkPlayerCollisions();
     }
 
-    // Update camera to follow player
-    this.camera.x = newHead.x - this.canvas.width / 2;
-    this.camera.y = newHead.y - this.canvas.height / 2;
+    // Dynamic zoom: zoom out as snake grows for better visibility
+    const playerLen = this.localPlayer.length;
+    this.targetZoom = Math.max(0.45, Math.min(1.0, 1.0 / (1 + Math.max(0, playerLen - 10) * 0.0015)));
+    this.zoom += (this.targetZoom - this.zoom) * 0.03;
+
+    // Update camera to follow player (zoom-adjusted)
+    this.camera.x = newHead.x - this.canvas.width / (2 * this.zoom);
+    this.camera.y = newHead.y - this.canvas.height / (2 * this.zoom);
 
     // Update particles
     this.updateParticles();
@@ -299,24 +306,6 @@ export class GameEngine {
       }
     });
 
-    // Self-collision (only check segments far from head to avoid false positives on turns)
-    if (this.localPlayer.segments.length > 60) {
-      for (let i = 50; i < this.localPlayer.segments.length; i++) {
-        const seg = this.localPlayer.segments[i];
-        const dx = head.x - seg.x;
-        const dy = head.y - seg.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < collisionRadius * 0.4) {
-          this.localPlayer.alive = false;
-          this.screenShake = 15;
-          this.spawnDeathParticles(head.x, head.y, this.localPlayer.color);
-          this.onDeath?.();
-          return;
-        }
-      }
-    }
-
     // World boundary collision
     const head2 = this.localPlayer.segments[0];
     if (
@@ -352,8 +341,9 @@ export class GameEngine {
       );
     }
 
-    // Apply camera transform
+    // Apply camera transform with zoom
     ctx.save();
+    ctx.scale(this.zoom, this.zoom);
     ctx.translate(-this.camera.x, -this.camera.y);
 
     // Render grid
@@ -433,8 +423,8 @@ export class GameEngine {
   private renderFoods(ctx: CanvasRenderingContext2D): void {
     const camX = this.camera.x;
     const camY = this.camera.y;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    const w = this.canvas.width / this.zoom;
+    const h = this.canvas.height / this.zoom;
     const margin = 50;
 
     this.foods.forEach((food) => {
@@ -477,11 +467,11 @@ export class GameEngine {
     // Reset shadow state
     ctx.shadowBlur = 0;
 
-    // Viewport culling for large snakes
+    // Viewport culling for large snakes (zoom-adjusted)
     const camX = this.camera.x;
     const camY = this.camera.y;
-    const vw = this.canvas.width;
-    const vh = this.canvas.height;
+    const vw = this.canvas.width / this.zoom;
+    const vh = this.canvas.height / this.zoom;
     const cullMargin = segSize * 3;
 
     // For big snakes (>100 segments), skip every other segment when far from head
@@ -594,10 +584,15 @@ export class GameEngine {
     const head = player.segments[0];
     if (!head) return;
 
-    const y = head.y - this.config.segmentSize * 2.5;
+    // Scale font inversely to zoom so names stay readable when zoomed out
+    const fontScale = Math.min(1 / this.zoom, 1.6);
+    const nameFontSize = Math.round(14 * fontScale);
+    const scoreFontSize = Math.round(11 * fontScale);
+    const yOffset = this.config.segmentSize * 2.5 * fontScale;
+    const y = head.y - yOffset;
 
     // Name
-    ctx.font = 'bold 14px Inter, system-ui, sans-serif';
+    ctx.font = `bold ${nameFontSize}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
@@ -610,9 +605,9 @@ export class GameEngine {
     ctx.fillText(player.name, head.x, y);
 
     // Score
-    ctx.font = '11px Inter, system-ui, sans-serif';
+    ctx.font = `${scoreFontSize}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = player.color;
-    ctx.fillText(`${Math.floor(player.score)}`, head.x, y - 16);
+    ctx.fillText(`${Math.floor(player.score)}`, head.x, y - nameFontSize - 2);
   }
 
   private renderMinimap(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
@@ -683,14 +678,14 @@ export class GameEngine {
       ctx.shadowBlur = 0;
     }
 
-    // Viewport indicator
+    // Viewport indicator (zoom-adjusted)
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     ctx.lineWidth = 1;
     ctx.strokeRect(
       mmX + this.camera.x * scale,
       mmY + this.camera.y * scale,
-      this.canvas.width * scale,
-      this.canvas.height * scale
+      (this.canvas.width / this.zoom) * scale,
+      (this.canvas.height / this.zoom) * scale
     );
 
     // Minimap label
