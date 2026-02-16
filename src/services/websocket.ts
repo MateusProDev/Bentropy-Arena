@@ -23,6 +23,7 @@ export class WSClient {
   private bots: Map<string, Player> = new Map();
   private botFoods: Food[] = [];
   private botInterval: ReturnType<typeof setInterval> | null = null;
+  private localPlayerRef: Player | null = null;
 
   constructor(url?: string) {
     this.url = url || import.meta.env.VITE_WS_URL || '';
@@ -304,6 +305,19 @@ export class WSClient {
         }
       });
 
+      // Check bot collision with LOCAL PLAYER body
+      if (!botDied && this.localPlayerRef && this.localPlayerRef.alive) {
+        for (let i = 1; i < this.localPlayerRef.segments.length; i++) {
+          const seg = this.localPlayerRef.segments[i];
+          const dx = newHead.x - seg.x;
+          const dy = newHead.y - seg.y;
+          if (dx * dx + dy * dy < DEFAULT_CONFIG.segmentSize * DEFAULT_CONFIG.segmentSize * 2.25) {
+            botDied = true;
+            break;
+          }
+        }
+      }
+
       // Check world boundary collision for bots
       if (newHead.x <= 10 || newHead.x >= DEFAULT_CONFIG.worldSize - 10 ||
           newHead.y <= 10 || newHead.y >= DEFAULT_CONFIG.worldSize - 10) {
@@ -313,17 +327,17 @@ export class WSClient {
       if (botDied) {
         bot.alive = false;
         deadBots.push(bot.id);
-        // Drop food where the bot died
-        const dropCount = Math.min(Math.floor(bot.length / 3), 15);
-        for (let i = 0; i < dropCount; i++) {
-          const seg = bot.segments[Math.floor(Math.random() * bot.segments.length)];
+        // Drop ENTIRE body trail as food for others to eat
+        const spacing = Math.max(1, Math.floor(bot.segments.length / 80));
+        for (let i = 0; i < bot.segments.length; i += spacing) {
+          const seg = bot.segments[i];
           if (seg) {
             this.botFoods.push({
               id: `food_drop_${Date.now()}_${bot.id}_${i}`,
-              position: { x: seg.x + (Math.random() - 0.5) * 30, y: seg.y + (Math.random() - 0.5) * 30 },
+              position: { x: seg.x + (Math.random() - 0.5) * 10, y: seg.y + (Math.random() - 0.5) * 10 },
               color: bot.color,
-              size: Math.random() * 4 + 5,
-              value: Math.floor(Math.random() * 3) + 2,
+              size: Math.random() * 3 + 5,
+              value: Math.floor(Math.random() * 2) + 2,
             });
           }
         }
@@ -422,6 +436,27 @@ export class WSClient {
     const handlers = this.handlers.get(type);
     if (handlers) {
       handlers.forEach((h) => h(msg));
+    }
+  }
+
+  public updateLocalPlayerRef(player: Player | null): void {
+    this.localPlayerRef = player;
+  }
+
+  public dropPlayerFood(player: Player): void {
+    // Drop the player's entire body as food on the arena
+    const spacing = Math.max(1, Math.floor(player.segments.length / 80));
+    for (let i = 0; i < player.segments.length; i += spacing) {
+      const seg = player.segments[i];
+      if (seg) {
+        this.botFoods.push({
+          id: `food_pdrop_${Date.now()}_${i}`,
+          position: { x: seg.x + (Math.random() - 0.5) * 10, y: seg.y + (Math.random() - 0.5) * 10 },
+          color: player.color,
+          size: Math.random() * 3 + 5,
+          value: Math.floor(Math.random() * 2) + 2,
+        });
+      }
     }
   }
 

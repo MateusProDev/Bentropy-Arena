@@ -25,29 +25,34 @@ export default function GameScreen() {
   const [connectionMode, setConnectionMode] = useState<'online' | 'local'>('local');
   const [playerName, setPlayerName] = useState('');
 
-  // Force landscape + fullscreen on mobile
+  // Force fullscreen on game start (both desktop and mobile)
   useEffect(() => {
-    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    if (!isMobile) return;
-
     const goFullscreen = async () => {
       try {
         if (!document.fullscreenElement) {
           await document.documentElement.requestFullscreen();
         }
       } catch { /* not available */ }
-      try {
-        await (screen.orientation as any).lock('landscape');
-      } catch { /* not supported */ }
+
+      // Landscape lock on mobile
+      const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (isMobile) {
+        try { await (screen.orientation as any).lock('landscape'); } catch { /* not supported */ }
+      }
     };
 
-    // First touch activates fullscreen (requires user gesture)
-    window.addEventListener('touchstart', goFullscreen, { once: true });
+    // requestFullscreen needs user gesture — try immediately (MenuScreen button is the gesture)
+    goFullscreen();
+
+    // Fallback: first interaction triggers it
+    const handler = () => goFullscreen();
+    window.addEventListener('click', handler, { once: true });
+    window.addEventListener('touchstart', handler, { once: true });
 
     return () => {
-      window.removeEventListener('touchstart', goFullscreen);
+      window.removeEventListener('click', handler);
+      window.removeEventListener('touchstart', handler);
       try { (screen.orientation as any).unlock(); } catch {}
-      try { if (document.fullscreenElement) document.exitFullscreen(); } catch {}
     };
   }, [gameSession]);
 
@@ -174,6 +179,9 @@ export default function GameScreen() {
         const lp = useGameStore.getState().localPlayer;
         if (!lp) return;
 
+        // Drop entire player body as food on the arena
+        ws.dropPlayerFood(lp);
+
         useGameStore.getState().setDeath({
           score: Math.floor(lp.score),
           length: Math.floor(lp.length),
@@ -206,9 +214,11 @@ export default function GameScreen() {
     engine.start();
 
     // Sync loop: push state from store to engine every frame
+    // Also keep WS client updated with local player ref (for bot-vs-player collision)
     const syncLoop = () => {
       const state = useGameStore.getState();
       engine.updateState(state.localPlayer, state.players, state.foods);
+      ws.updateLocalPlayerRef(state.localPlayer);
       frameRef.current = requestAnimationFrame(syncLoop);
     };
     frameRef.current = requestAnimationFrame(syncLoop);
