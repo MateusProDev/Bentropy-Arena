@@ -89,22 +89,23 @@ export default function GameScreen() {
       const localId = user.uid;
       const isOnline = !ws.fallbackMode && ws.connected;
 
-      // Separate local player data from remote players
       const remoteMap = new Map<string, Player>();
       let totalCount = 0;
 
       Object.entries(payload.players).forEach(([id, p]) => {
         if (isOnline && id === localId) {
-          // In online mode: update score/length from server (authoritative)
+          // Online mode: only take server score/length if they're HIGHER than local
+          // This prevents server state from overwriting locally-eaten food (race condition)
           const localP = useGameStore.getState().localPlayer;
           if (localP) {
-            // Keep local position (prediction) but sync game state from server
+            const syncedScore = Math.max(localP.score, p.score);
+            const syncedLength = Math.max(localP.length, p.length);
             useGameStore.getState().updateLocalPlayer({
-              score: p.score,
-              length: p.length,
+              score: syncedScore,
+              length: syncedLength,
             });
-            setScore(p.score);
-            setLength(p.length);
+            setScore(syncedScore);
+            setLength(syncedLength);
           }
         } else {
           remoteMap.set(id, p);
@@ -119,10 +120,6 @@ export default function GameScreen() {
       }
       setPlayerCount(isOnline ? totalCount : totalCount + 1);
       setConnectionMode(isOnline ? 'online' : 'local');
-
-      // CRITICAL: Set engine mode - must match connection state
-      // In fallback/local mode: engine handles collisions
-      // In online mode: server handles collisions
       engine.isOnlineMode = isOnline;
     };
 
@@ -173,13 +170,11 @@ export default function GameScreen() {
     };
 
     engine.onScoreUpdate = (newScore) => {
-      // Only used in fallback/offline mode (engine detects food collision locally)
-      if (ws.fallbackMode) {
-        setScore(newScore);
-        const lp = useGameStore.getState().localPlayer;
-        if (lp) setLength(lp.length);
-        useGameStore.getState().updateLocalPlayer({ score: newScore });
-      }
+      // Always update HUD when food is eaten (online or offline)
+      setScore(newScore);
+      const lp = useGameStore.getState().localPlayer;
+      if (lp) setLength(lp.length);
+      useGameStore.getState().updateLocalPlayer({ score: newScore });
     };
 
     engine.onDeath = () => {
