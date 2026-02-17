@@ -45,8 +45,36 @@ const server = createServer((req, res) => {
   res.end('Not found');
 });
 
-// WebSocket server
-const wss = new WebSocketServer({ server });
+// WebSocket server with origin verification
+const wss = new WebSocketServer({ 
+  server,
+  verifyClient: (info) => {
+    const origin = info.origin || info.req.headers.origin || '';
+    console.log(`[WS] Connection attempt from origin: ${origin}`);
+    
+    // Allow all origins if configured with *
+    if (ALLOWED_ORIGINS.includes('*')) {
+      console.log('[WS] Origin accepted (wildcard)');
+      return true;
+    }
+    
+    // Check if origin is in allowed list
+    const allowed = ALLOWED_ORIGINS.some(allowedOrigin => {
+      // Remove trailing slash for comparison
+      const normalizedAllowed = allowedOrigin.replace(/\/$/, '');
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      return normalizedOrigin === normalizedAllowed;
+    });
+    
+    if (allowed) {
+      console.log('[WS] Origin accepted:', origin);
+    } else {
+      console.warn('[WS] Origin rejected:', origin, 'Allowed:', ALLOWED_ORIGINS);
+    }
+    
+    return allowed;
+  }
+});
 const room = new GameRoom();
 
 wss.on('connection', (ws: WebSocket, req) => {
