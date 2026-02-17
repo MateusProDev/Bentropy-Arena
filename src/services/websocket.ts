@@ -29,11 +29,19 @@ export class WSClient {
 
   constructor(url?: string) {
     this.url = url || import.meta.env.VITE_WS_URL || '';
+    console.log('[WS] Configuration:', {
+      url: this.url,
+      env: import.meta.env.VITE_WS_URL,
+      protocol: window.location.protocol,
+    });
   }
 
   public connect(joinPayload: JoinPayload): void {
+    console.log('[WS] Attempting connection to:', this.url);
+    
     // No server URL configured → immediate fallback with local bots
     if (!this.url) {
+      console.warn('[WS] No URL configured, starting fallback mode');
       this.startFallbackMode(joinPayload);
       return;
     }
