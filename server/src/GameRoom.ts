@@ -214,7 +214,7 @@ export class GameRoom {
       const old = this.players.get(playerId)!;
       if (old.ws) {
         this.wsToPlayerId.delete(old.ws);
-        try { old.ws.close(); } catch { /* ignore */ }
+        try { old.ws.close(); } catch (_e) { /* ignore */ }
       }
       this.players.delete(playerId);
     }
@@ -462,23 +462,13 @@ export class GameRoom {
 
     const now = Date.now();
 
-    this.players.forEach((sp) => {
-      if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
-
-      const head = sp.player.segments[0];
-      if (!head) return;
-
-      // Cull players: include self + nearby players
-      // Send fewer segments for distant snakes to save bandwidth
-      const playerData: Record<string, any> = {};
     this.players.forEach((sp, currentPlayerId) => {
       if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
 
       const head = sp.player.segments[0];
       if (!head) return;
 
-      // Cull players: include self + nearby players
-      // Send fewer segments for distant snakes to save bandwidth
+      // Cull players + LOD: send fewer segments for distant snakes
       const playerData: Record<string, any> = {};
       this.players.forEach((other, id) => {
         if (!other.player.alive) return;
@@ -489,15 +479,14 @@ export class GameRoom {
         const distSq = dx * dx + dy * dy;
         if (distSq > VIEW_RADIUS_SQ) return;
 
-        // Limit segments based on distance: close = full, far = fewer
         const isSelf = id === currentPlayerId;
         const maxSegs = isSelf
-          ? other.player.segments.length          // self: all segments for local rendering
+          ? other.player.segments.length
           : distSq < 800 * 800
-            ? other.player.segments.length         // very close: full
+            ? other.player.segments.length
             : distSq < 1500 * 1500
-              ? Math.min(other.player.segments.length, 80)  // medium: up to 80
-              : Math.min(other.player.segments.length, 30); // far: up to 30
+              ? Math.min(other.player.segments.length, 80)
+              : Math.min(other.player.segments.length, 30);
 
         playerData[id] = {
           id: other.player.id,
@@ -515,8 +504,8 @@ export class GameRoom {
         };
       });
 
-      // Cull foods: only nearby, send minimal fields
-      const nearbyFoods: { id: string; position: Vector2D; color: string; size: number; value: number }[] = [];
+      // Cull foods: only nearby
+      const nearbyFoods: Food[] = [];
       for (const food of this.foods) {
         const dx = food.position.x - head.x;
         const dy = food.position.y - head.y;
@@ -531,7 +520,7 @@ export class GameRoom {
           payload: { players: playerData, foods: nearbyFoods, tick: this.tick },
           timestamp: now,
         }));
-      } catch { /* ignore send errors */ }
+      } catch (_e) { /* ignore send errors */ }
     });
   }
 
