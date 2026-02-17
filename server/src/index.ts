@@ -3,7 +3,8 @@
 // ============================================================
 
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer } from 'http';
+import { createServer, IncomingMessage } from 'http';
+import { Socket } from 'net';
 import { GameRoom } from './GameRoom.js';
 
 const PORT = parseInt(process.env.PORT || '8080');
@@ -48,7 +49,7 @@ const server = createServer((req, res) => {
 // WebSocket server with origin verification
 const wss = new WebSocketServer({ 
   server,
-  verifyClient: (info) => {
+  verifyClient: (info: { origin: string; secure: boolean; req: IncomingMessage }) => {
     const origin = info.origin || info.req.headers.origin || '';
     console.log(`[WS] Connection attempt from origin: ${origin}`);
     
