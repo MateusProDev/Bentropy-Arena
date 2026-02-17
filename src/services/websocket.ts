@@ -75,7 +75,7 @@ export class WSClient {
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.isFallbackMode = false;
-        const joinMsg = { type: 'join', payload: joinPayload, timestamp: Date.now() };
+        const joinMsg: WSMessage = { type: 'join', payload: joinPayload, timestamp: Date.now() };
         console.log('[WS] Sending join message:', joinMsg);
         this.send(joinMsg);
       };
