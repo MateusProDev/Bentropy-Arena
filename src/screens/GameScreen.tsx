@@ -27,7 +27,10 @@ export default function GameScreen() {
   const [playerName, setPlayerName] = useState('');
   const [activeAbility, setActiveAbility] = useState<DevilFruitAbility | null>(null);
   const [abilityTimeLeft, setAbilityTimeLeft] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingStatus, setLoadingStatus] = useState('Conectando à arena...');
   const abilityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const firstStateRef = useRef(false);
 
   // Force fullscreen on game start (both desktop and mobile)
   useEffect(() => {
@@ -70,6 +73,8 @@ export default function GameScreen() {
     setScore(0);
     setLength(currentPlayer.length);
     setPlayerName(currentPlayer.name);
+    setIsLoading(true);
+    setLoadingStatus('Conectando à arena...');
 
     const engine = new GameEngine(canvasRef.current);
     engineRef.current = engine;
@@ -88,6 +93,13 @@ export default function GameScreen() {
       const payload = msg.payload as StatePayload;
       const localId = user.uid;
       const isOnline = !ws.fallbackMode && ws.connected;
+
+      // First state received → hide loading screen
+      if (!firstStateRef.current) {
+        firstStateRef.current = true;
+        setLoadingStatus(isOnline ? 'Entrando na arena...' : 'Modo offline ativado');
+        setTimeout(() => setIsLoading(false), 400);
+      }
 
       const remoteMap = new Map<string, Player>();
       let totalCount = 0;
@@ -387,6 +399,46 @@ export default function GameScreen() {
 
   return (
     <div className="game-canvas-container">
+      {/* Loading Screen */}
+      {isLoading && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 100,
+          background: 'linear-gradient(135deg, #0a0f1e 0%, #0d1225 100%)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: '24px',
+        }}>
+          <div style={{ fontSize: '64px' }}>🐍</div>
+          <div style={{
+            fontSize: '28px', fontWeight: 'bold', color: '#10b981',
+            letterSpacing: '2px', textTransform: 'uppercase',
+          }}>Bentropy Arena</div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{
+              width: '10px', height: '10px', borderRadius: '50%',
+              background: '#10b981', animation: 'pulse 1s infinite',
+            }} />
+            <div style={{ color: '#94a3b8', fontSize: '14px' }}>{loadingStatus}</div>
+          </div>
+          <div style={{
+            width: '200px', height: '3px',
+            background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%', background: '#10b981', borderRadius: '2px',
+              animation: 'loading-bar 1.5s ease-in-out infinite',
+              width: '40%',
+            }} />
+          </div>
+          <style>{`
+            @keyframes loading-bar {
+              0% { transform: translateX(-100%) scaleX(0.5); }
+              50% { transform: translateX(150%) scaleX(1.5); }
+              100% { transform: translateX(400%) scaleX(0.5); }
+            }
+          `}</style>
+        </div>
+      )}
+
       <canvas
         ref={canvasRef}
         className="block w-full h-full"
