@@ -77,7 +77,7 @@ const DEFAULT_CONFIG: GameConfig = {
 };
 
 // Viewport radius: only send entities within this distance
-const VIEW_RADIUS = 2500;
+const VIEW_RADIUS = 4000;
 const VIEW_RADIUS_SQ = VIEW_RADIUS * VIEW_RADIUS;
 
 const SNAKE_COLORS = [
@@ -176,6 +176,9 @@ export class GameRoom {
       case 'move':
         this.handleMove(ws, msg.payload);
         break;
+      case 'food_eaten':
+        this.handleFoodEaten(ws, msg.payload);
+        break;
       case 'ping':
         this.sendTo(ws, { type: 'pong', payload: { serverTime: Date.now() }, timestamp: Date.now() });
         break;
@@ -249,6 +252,22 @@ export class GameRoom {
     this.maintainBots();
   }
 
+  private handleFoodEaten(ws: WebSocket, payload: any): void {
+    const playerId = this.wsToPlayerId.get(ws);
+    if (!playerId) return;
+    const sp = this.players.get(playerId);
+    if (!sp || !sp.player.alive) return;
+
+    const { foodId } = payload;
+    const foodIdx = this.foods.findIndex(f => f.id === foodId);
+    if (foodIdx !== -1) {
+      const food = this.foods[foodIdx];
+      sp.player.score += food.value;
+      sp.player.length += this.config.growthRate;
+      this.foods[foodIdx] = this.createFood(); // respawn food
+    }
+  }
+
   private handleMove(ws: WebSocket, payload: any): void {
     const playerId = this.wsToPlayerId.get(ws);
     if (!playerId) return;
@@ -262,6 +281,14 @@ export class GameRoom {
       if (len > 0) {
         sp.inputDirection = { x: x / len, y: y / len };
       }
+    }
+
+    // Use client-reported position for viewport culling (reduces divergence)
+    if (payload.position && typeof payload.position.x === 'number') {
+      sp.player.segments[0] = {
+        x: Math.max(0, Math.min(this.config.worldSize, payload.position.x)),
+        y: Math.max(0, Math.min(this.config.worldSize, payload.position.y)),
+      };
     }
 
     if (payload.boosting !== undefined) {
@@ -329,18 +356,19 @@ export class GameRoom {
         return;
       }
 
-      // Food collision
-      for (let i = this.foods.length - 1; i >= 0; i--) {
-        const food = this.foods[i];
-        const dx = newHead.x - food.position.x;
-        const dy = newHead.y - food.position.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < this.config.segmentSize + this.config.foodSize) {
-          sp.player.score += food.value;
-          sp.player.length += this.config.growthRate;
-          // Respawn food at new location
-          this.foods[i] = this.createFood();
-          break;
+      // Food collision — only for bots; humans are client-authoritative (via food_eaten message)
+      if (sp.isBot) {
+        for (let i = this.foods.length - 1; i >= 0; i--) {
+          const food = this.foods[i];
+          const dx = newHead.x - food.position.x;
+          const dy = newHead.y - food.position.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < this.config.segmentSize + this.config.foodSize) {
+            sp.player.score += food.value;
+            sp.player.length += this.config.growthRate;
+            this.foods[i] = this.createFood();
+            break;
+          }
         }
       }
 

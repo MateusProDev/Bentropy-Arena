@@ -259,10 +259,11 @@ export class GameEngine {
       }
     }
 
-    // In online mode, server handles collisions
+    // Food & devil fruit: always client-authoritative (instant feedback, no lag)
+    this.checkFoodCollisions();
+    this.checkDevilFruitCollisions();
+    // Player collisions: server-authoritative in online mode
     if (!this.isOnlineMode) {
-      this.checkFoodCollisions();
-      this.checkDevilFruitCollisions();
       this.checkPlayerCollisions();
     }
 
