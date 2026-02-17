@@ -266,9 +266,9 @@ export class GameEngine {
       this.checkPlayerCollisions();
     }
 
-    // Dynamic zoom
+    // Dynamic zoom — zoom out more for bigger snakes
     const playerLen = this.localPlayer.length;
-    this.targetZoom = Math.max(0.45, Math.min(1.0, 1.0 / (1 + Math.max(0, playerLen - 10) * 0.0015)));
+    this.targetZoom = Math.max(0.22, Math.min(1.0, 1.0 / (1 + Math.max(0, playerLen - 10) * 0.002)));
     this.zoom += (this.targetZoom - this.zoom) * 0.03;
 
     // Camera
@@ -284,7 +284,10 @@ export class GameEngine {
   private checkFoodCollisions(): void {
     if (!this.localPlayer) return;
     const head = this.localPlayer.segments[0];
-    const eatRadius = this.config.segmentSize * 2 + this.config.foodSize;
+    // Eat radius scales with snake thickness so fat snakes scoop up more food
+    const len = Math.max(this.localPlayer.length, 1);
+    const thickMult = 1 + Math.log2(1 + len / 8) * 1.1;
+    const eatRadius = this.config.segmentSize * thickMult * 1.5 + this.config.foodSize;
 
     for (let i = this.foods.length - 1; i >= 0; i--) {
       const food = this.foods[i];
@@ -304,7 +307,10 @@ export class GameEngine {
   private checkDevilFruitCollisions(): void {
     if (!this.localPlayer) return;
     const head = this.localPlayer.segments[0];
-    const eatRadius = 28;
+    // Eat radius scales with thickness
+    const len = Math.max(this.localPlayer.length, 1);
+    const thickMult = 1 + Math.log2(1 + len / 8) * 1.1;
+    const eatRadius = Math.max(28, this.config.segmentSize * thickMult * 1.2);
 
     for (let i = this.devilFruits.length - 1; i >= 0; i--) {
       const fruit = this.devilFruits[i];
@@ -330,7 +336,10 @@ export class GameEngine {
     if (ability === 'phasing' || ability === 'freeze') return;
 
     const head = this.localPlayer.segments[0];
-    const collisionRadius = this.config.segmentSize;
+    // Collision radius scales with both snakes' thickness
+    const myLen = Math.max(this.localPlayer.length, 1);
+    const myThick = 1 + Math.log2(1 + myLen / 8) * 1.1;
+    const myRadius = this.config.segmentSize * myThick;
     let collided = false;
     let killerName: string | null = null;
 
@@ -338,11 +347,17 @@ export class GameEngine {
       if (collided) return;
       if (!player.alive || player.id === this.localPlayer!.id) return;
 
+      const otherLen = Math.max(player.length, 1);
+      const otherThick = 1 + Math.log2(1 + otherLen / 8) * 1.1;
+      const otherRadius = this.config.segmentSize * otherThick;
+      const headCollisionDist = (myRadius + otherRadius) * 0.6;
+      const bodyCollisionDist = myRadius * 0.5 + otherRadius * 0.8;
+
       const otherHead = player.segments[0];
       if (otherHead) {
         const dhx = head.x - otherHead.x;
         const dhy = head.y - otherHead.y;
-        if (Math.sqrt(dhx * dhx + dhy * dhy) < collisionRadius * 1.3) {
+        if (Math.sqrt(dhx * dhx + dhy * dhy) < headCollisionDist) {
           collided = true;
           killerName = player.name;
           return;
@@ -353,7 +368,7 @@ export class GameEngine {
         const seg = player.segments[i];
         const dx = head.x - seg.x;
         const dy = head.y - seg.y;
-        if (Math.sqrt(dx * dx + dy * dy) < collisionRadius) {
+        if (Math.sqrt(dx * dx + dy * dy) < bodyCollisionDist) {
           collided = true;
           killerName = player.name;
           return;
@@ -677,8 +692,10 @@ export class GameEngine {
     const color = player.color;
     const ability = player.activeAbility;
 
-    // Dynamic thickness: snakes get thicker as they grow
-    const thicknessMult = 1 + Math.min(player.length, 500) / 250;
+    // Dynamic thickness: snakes get MUCH thicker as they grow
+    // length 10 -> 1x, length 50 -> ~2x, length 150 -> ~3.5x, length 400 -> ~5.5x, length 800+ -> ~8x
+    const len = Math.max(player.length, 1);
+    const thicknessMult = 1 + Math.log2(1 + len / 8) * 1.1;
     const baseSize = segSize * thicknessMult;
 
     ctx.shadowBlur = 0;

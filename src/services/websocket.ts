@@ -317,13 +317,20 @@ export class WSClient {
 
       // Check bot collision with other bot bodies
       let botDied = false;
+      const botThick = 1 + Math.log2(1 + Math.max(bot.length, 1) / 8) * 1.1;
+      const botRadius = DEFAULT_CONFIG.segmentSize * botThick;
+
       this.bots.forEach((other) => {
         if (other.id === bot.id || !other.alive || botDied) return;
+        const otherThick = 1 + Math.log2(1 + Math.max(other.length, 1) / 8) * 1.1;
+        const otherRadius = DEFAULT_CONFIG.segmentSize * otherThick;
+        const collDist = (botRadius * 0.5 + otherRadius * 0.8);
+        const collDistSq = collDist * collDist;
         for (let i = 1; i < other.segments.length; i++) {
           const seg = other.segments[i];
           const dx = newHead.x - seg.x;
           const dy = newHead.y - seg.y;
-          if (dx * dx + dy * dy < DEFAULT_CONFIG.segmentSize * DEFAULT_CONFIG.segmentSize * 2.25) {
+          if (dx * dx + dy * dy < collDistSq) {
             botDied = true;
             break;
           }
@@ -335,11 +342,16 @@ export class WSClient {
         // Skip if player has phasing or invisibility
         const pAbility = this.localPlayerRef.activeAbility;
         if (pAbility !== 'phasing' && pAbility !== 'invisibility' && pAbility !== 'freeze') {
+          const pLen = Math.max(this.localPlayerRef.length, 1);
+          const pThick = 1 + Math.log2(1 + pLen / 8) * 1.1;
+          const pRadius = DEFAULT_CONFIG.segmentSize * pThick;
+          const collDist = (botRadius * 0.5 + pRadius * 0.8);
+          const collDistSq = collDist * collDist;
           for (let i = 1; i < this.localPlayerRef.segments.length; i++) {
             const seg = this.localPlayerRef.segments[i];
             const dx = newHead.x - seg.x;
             const dy = newHead.y - seg.y;
-            if (dx * dx + dy * dy < DEFAULT_CONFIG.segmentSize * DEFAULT_CONFIG.segmentSize * 2.25) {
+            if (dx * dx + dy * dy < collDistSq) {
               botDied = true;
               break;
             }
