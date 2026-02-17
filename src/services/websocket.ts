@@ -317,12 +317,12 @@ export class WSClient {
 
       // Check bot collision with other bot bodies
       let botDied = false;
-      const botThick = 1 + Math.log2(1 + Math.max(bot.length, 1) / 8) * 1.1;
+      const botThick = 1 + Math.log2(1 + Math.max(0, bot.length - 10) / 12) * 0.9;
       const botRadius = DEFAULT_CONFIG.segmentSize * botThick;
 
       this.bots.forEach((other) => {
         if (other.id === bot.id || !other.alive || botDied) return;
-        const otherThick = 1 + Math.log2(1 + Math.max(other.length, 1) / 8) * 1.1;
+        const otherThick = 1 + Math.log2(1 + Math.max(0, other.length - 10) / 12) * 0.9;
         const otherRadius = DEFAULT_CONFIG.segmentSize * otherThick;
         const collDist = (botRadius * 0.5 + otherRadius * 0.8);
         const collDistSq = collDist * collDist;
@@ -343,7 +343,7 @@ export class WSClient {
         const pAbility = this.localPlayerRef.activeAbility;
         if (pAbility !== 'phasing' && pAbility !== 'invisibility' && pAbility !== 'freeze') {
           const pLen = Math.max(this.localPlayerRef.length, 1);
-          const pThick = 1 + Math.log2(1 + pLen / 8) * 1.1;
+          const pThick = 1 + Math.log2(1 + Math.max(0, pLen - 10) / 12) * 0.9;
           const pRadius = DEFAULT_CONFIG.segmentSize * pThick;
           const collDist = (botRadius * 0.5 + pRadius * 0.8);
           const collDistSq = collDist * collDist;

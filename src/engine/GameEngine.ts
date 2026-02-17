@@ -286,7 +286,7 @@ export class GameEngine {
     const head = this.localPlayer.segments[0];
     // Eat radius scales with snake thickness so fat snakes scoop up more food
     const len = Math.max(this.localPlayer.length, 1);
-    const thickMult = 1 + Math.log2(1 + len / 8) * 1.1;
+    const thickMult = this.getThicknessMult(len);
     const eatRadius = this.config.segmentSize * thickMult * 1.5 + this.config.foodSize;
 
     for (let i = this.foods.length - 1; i >= 0; i--) {
@@ -309,7 +309,7 @@ export class GameEngine {
     const head = this.localPlayer.segments[0];
     // Eat radius scales with thickness
     const len = Math.max(this.localPlayer.length, 1);
-    const thickMult = 1 + Math.log2(1 + len / 8) * 1.1;
+    const thickMult = this.getThicknessMult(len);
     const eatRadius = Math.max(28, this.config.segmentSize * thickMult * 1.2);
 
     for (let i = this.devilFruits.length - 1; i >= 0; i--) {
@@ -338,7 +338,7 @@ export class GameEngine {
     const head = this.localPlayer.segments[0];
     // Collision radius scales with both snakes' thickness
     const myLen = Math.max(this.localPlayer.length, 1);
-    const myThick = 1 + Math.log2(1 + myLen / 8) * 1.1;
+    const myThick = this.getThicknessMult(myLen);
     const myRadius = this.config.segmentSize * myThick;
     let collided = false;
     let killerName: string | null = null;
@@ -348,7 +348,7 @@ export class GameEngine {
       if (!player.alive || player.id === this.localPlayer!.id) return;
 
       const otherLen = Math.max(player.length, 1);
-      const otherThick = 1 + Math.log2(1 + otherLen / 8) * 1.1;
+      const otherThick = this.getThicknessMult(otherLen);
       const otherRadius = this.config.segmentSize * otherThick;
       const headCollisionDist = (myRadius + otherRadius) * 0.6;
       const bodyCollisionDist = myRadius * 0.5 + otherRadius * 0.8;
@@ -563,32 +563,60 @@ export class GameEngine {
     const camY = this.camera.y;
     const w = this.canvas.width / this.zoom;
     const h = this.canvas.height / this.zoom;
-    const foodMargin = 50;
+    const foodMargin = 30;
+    const now = Date.now();
 
-    this.foods.forEach((food) => {
-      if (
-        food.position.x < camX - foodMargin || food.position.x > camX + w + foodMargin ||
-        food.position.y < camY - foodMargin || food.position.y > camY + h + foodMargin
-      ) return;
+    // Batch foods by color to minimize fillStyle changes
+    const batches = new Map<string, { x: number; y: number; s: number }[]>();
 
-      const pulse = 1 + Math.sin(Date.now() * 0.005 + food.position.x) * 0.15;
+    for (let fi = 0; fi < this.foods.length; fi++) {
+      const food = this.foods[fi];
+      const fx = food.position.x;
+      const fy = food.position.y;
+      if (fx < camX - foodMargin || fx > camX + w + foodMargin ||
+          fy < camY - foodMargin || fy > camY + h + foodMargin) continue;
+
+      const pulse = 1 + Math.sin(now * 0.005 + fx) * 0.12;
       const size = food.size * pulse;
 
-      ctx.fillStyle = food.color + '30';
-      ctx.beginPath();
-      ctx.arc(food.position.x, food.position.y, size * 2, 0, Math.PI * 2);
-      ctx.fill();
+      let batch = batches.get(food.color);
+      if (!batch) { batch = []; batches.set(food.color, batch); }
+      batch.push({ x: fx, y: fy, s: size });
+    }
 
-      ctx.fillStyle = food.color;
+    // Draw glow layer (batched)
+    batches.forEach((foods, color) => {
+      ctx.fillStyle = color + '25';
       ctx.beginPath();
-      ctx.arc(food.position.x, food.position.y, size, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.beginPath();
-      ctx.arc(food.position.x - size * 0.2, food.position.y - size * 0.2, size * 0.35, 0, Math.PI * 2);
+      for (const f of foods) {
+        ctx.moveTo(f.x + f.s * 1.8, f.y);
+        ctx.arc(f.x, f.y, f.s * 1.8, 0, Math.PI * 2);
+      }
       ctx.fill();
     });
+
+    // Draw food bodies (batched)
+    batches.forEach((foods, color) => {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      for (const f of foods) {
+        ctx.moveTo(f.x + f.s, f.y);
+        ctx.arc(f.x, f.y, f.s, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    });
+
+    // Highlight dots (single batch for all)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.beginPath();
+    batches.forEach((foods) => {
+      for (const f of foods) {
+        const hr = f.s * 0.3;
+        ctx.moveTo(f.x - f.s * 0.15 + hr, f.y - f.s * 0.15);
+        ctx.arc(f.x - f.s * 0.15, f.y - f.s * 0.15, hr, 0, Math.PI * 2);
+      }
+    });
+    ctx.fill();
   }
 
   private renderDevilFruits(ctx: CanvasRenderingContext2D): void {
@@ -684,6 +712,12 @@ export class GameEngine {
     });
   }
 
+  // Thickness multiplier: starts at 1x for newborn (len=10), grows gradually
+  private getThicknessMult(len: number): number {
+    const effective = Math.max(0, len - 10);
+    return 1 + Math.log2(1 + effective / 12) * 0.9;
+  }
+
   private renderSnake(ctx: CanvasRenderingContext2D, player: Player, isLocal = false): void {
     const segments = player.segments;
     if (segments.length < 2) return;
@@ -692,34 +726,27 @@ export class GameEngine {
     const color = player.color;
     const ability = player.activeAbility;
 
-    // Dynamic thickness: snakes get MUCH thicker as they grow
-    // length 10 -> 1x, length 50 -> ~2x, length 150 -> ~3.5x, length 400 -> ~5.5x, length 800+ -> ~8x
+    // Dynamic thickness: starts normal, grows as snake eats
     const len = Math.max(player.length, 1);
-    const thicknessMult = 1 + Math.log2(1 + len / 8) * 1.1;
+    const thicknessMult = this.getThicknessMult(len);
     const baseSize = segSize * thicknessMult;
 
-    ctx.shadowBlur = 0;
-
-    // Ability visual: invisibility
+    // Ability visual: invisibility / phasing
     if (ability === 'invisibility') {
       ctx.globalAlpha = isLocal ? 0.25 : 0.08;
-    }
-    // Ability visual: phasing shimmer
-    if (ability === 'phasing') {
+    } else if (ability === 'phasing') {
       const phaseCycle = (Date.now() % 600) / 600;
       ctx.globalAlpha = 0.4 + Math.sin(phaseCycle * Math.PI * 2) * 0.3;
     }
 
-    // Viewport culling
+    // Viewport culling bounds
     const camX = this.camera.x;
     const camY = this.camera.y;
     const vw = this.canvas.width / this.zoom;
     const vh = this.canvas.height / this.zoom;
-    const cullMargin = baseSize * 3;
+    const cullMargin = baseSize * 4;
 
-    const skipInterval = segments.length > 150 ? 2 : 1;
-
-    // Ability glow
+    // Ability glow color
     let abilityGlow: string | null = null;
     if (ability === 'freeze') abilityGlow = '#85c1e9';
     if (ability === 'fireboost') abilityGlow = '#f39c12';
@@ -728,64 +755,84 @@ export class GameEngine {
     if (ability === 'resistance') abilityGlow = '#ff6b6b';
     if (ability === 'magnet') abilityGlow = '#5d6d7e';
 
-    // Body glow
-    if (isLocal || player.boosting || abilityGlow) {
-      ctx.shadowColor = abilityGlow || color;
-      ctx.shadowBlur = abilityGlow
-        ? 15 + Math.sin(Date.now() * 0.005) * 8
-        : (player.boosting ? 20 : 10);
-    }
+    const bodyColor = ability === 'freeze' ? '#3498db' : color;
+    const bodyColorLight = this.lightenColor(bodyColor, 25);
+    const bodyColorDark = this.darkenColor(bodyColor, 40);
+    const strokeColor = abilityGlow ? this.darkenColor(abilityGlow, 20) : bodyColorDark;
 
-    // Draw body segments
-    for (let i = segments.length - 1; i >= 0; i--) {
-      if (skipInterval > 1 && i > 10 && i % skipInterval !== 0) continue;
+    // === Build visible segment list with thickness per segment ===
+    // Downsample long snakes: keep every Nth segment for body path
+    const step = segments.length > 300 ? 3 : segments.length > 100 ? 2 : 1;
+    const visSegs: { x: number; y: number; r: number }[] = [];
 
+    for (let i = 0; i < segments.length; i += step) {
       const seg = segments[i];
+      // Viewport cull individual segments
       if (seg.x < camX - cullMargin || seg.x > camX + vw + cullMargin ||
-          seg.y < camY - cullMargin || seg.y > camY + vh + cullMargin) continue;
+          seg.y < camY - cullMargin || seg.y > camY + vh + cullMargin) {
+        // Push null-like marker to break path continuity
+        if (visSegs.length > 0 && visSegs[visSegs.length - 1].r > 0) {
+          visSegs.push({ x: seg.x, y: seg.y, r: -1 }); // break marker
+        }
+        continue;
+      }
 
+      // Taper from head (1.0) to tail (0.4)
       const t = 1 - i / segments.length;
-      const size = baseSize * (0.5 + t * 0.5) * (skipInterval > 1 && i > 10 ? 1.3 : 1);
-      const alpha = 0.5 + t * 0.5;
-      const isPattern = i % 3 === 0;
-
-      if (ability === 'freeze') {
-        ctx.fillStyle = isPattern
-          ? this.lightenColor('#3498db', 30)
-          : this.adjustAlpha('#3498db', alpha * 0.7);
-      } else {
-        ctx.fillStyle = isPattern
-          ? this.lightenColor(color, 30)
-          : this.adjustAlpha(color, alpha);
-      }
-
-      ctx.beginPath();
-      ctx.arc(seg.x, seg.y, size, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (i < 20) {
-        ctx.strokeStyle = abilityGlow
-          ? this.adjustAlpha(abilityGlow, 0.5)
-          : this.darkenColor(color, 30);
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
+      const radius = baseSize * (0.4 + t * 0.6);
+      visSegs.push({ x: seg.x, y: seg.y, r: radius });
     }
 
+    if (visSegs.length < 2) {
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    // === Draw smooth snake body using thick stroked path with round caps ===
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.shadowBlur = 0;
 
-    // Head — scales with thickness
-    const head = segments[0];
-    const headSize = baseSize * 1.3;
+    // Outer stroke (dark border) — one single path for entire body
+    ctx.strokeStyle = strokeColor;
+    this.drawSmoothSnakePath(ctx, visSegs, 1.3);
 
+    // Inner fill (main color)
+    ctx.strokeStyle = bodyColor;
+    this.drawSmoothSnakePath(ctx, visSegs, 1.0);
+
+    // Highlight stripe on top (lighter, thinner)
+    ctx.strokeStyle = bodyColorLight + 'a0';
+    this.drawSmoothSnakePath(ctx, visSegs, 0.35);
+
+    ctx.restore();
+
+    // === Head ===
+    const head = segments[0];
+    const headSize = baseSize * 1.2;
+
+    // Head glow
     ctx.shadowColor = abilityGlow || color;
-    ctx.shadowBlur = 20;
-    ctx.fillStyle = ability === 'freeze'
-      ? this.lightenColor('#3498db', 40)
-      : this.lightenColor(color, 40);
+    ctx.shadowBlur = isLocal || player.boosting || abilityGlow ? 18 : 8;
+
+    // Head circle with gradient
+    const headGrad = ctx.createRadialGradient(
+      head.x - headSize * 0.2, head.y - headSize * 0.2, headSize * 0.1,
+      head.x, head.y, headSize
+    );
+    headGrad.addColorStop(0, this.lightenColor(bodyColor, 50));
+    headGrad.addColorStop(0.6, bodyColor);
+    headGrad.addColorStop(1, bodyColorDark);
+    ctx.fillStyle = headGrad;
     ctx.beginPath();
     ctx.arc(head.x, head.y, headSize, 0, Math.PI * 2);
     ctx.fill();
+
+    // Head border
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = Math.max(1, headSize * 0.12);
+    ctx.stroke();
     ctx.shadowBlur = 0;
 
     // Eyes
@@ -795,41 +842,72 @@ export class GameEngine {
     const perpY = dir.x;
 
     const eyePositions = [
-      { x: head.x + dir.x * eyeOffset * 0.5 + perpX * eyeOffset, y: head.y + dir.y * eyeOffset * 0.5 + perpY * eyeOffset },
-      { x: head.x + dir.x * eyeOffset * 0.5 - perpX * eyeOffset, y: head.y + dir.y * eyeOffset * 0.5 - perpY * eyeOffset },
+      { x: head.x + dir.x * eyeOffset * 0.6 + perpX * eyeOffset, y: head.y + dir.y * eyeOffset * 0.6 + perpY * eyeOffset },
+      { x: head.x + dir.x * eyeOffset * 0.6 - perpX * eyeOffset, y: head.y + dir.y * eyeOffset * 0.6 - perpY * eyeOffset },
     ];
 
     eyePositions.forEach((eye) => {
+      // White
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.arc(eye.x, eye.y, headSize * 0.3, 0, Math.PI * 2);
+      ctx.arc(eye.x, eye.y, headSize * 0.28, 0, Math.PI * 2);
       ctx.fill();
-
+      // Pupil
       ctx.fillStyle = '#111827';
       ctx.beginPath();
       ctx.arc(
         eye.x + dir.x * headSize * 0.1,
         eye.y + dir.y * headSize * 0.1,
-        headSize * 0.15,
-        0,
-        Math.PI * 2
+        headSize * 0.14,
+        0, Math.PI * 2
       );
       ctx.fill();
+      // Eye glint
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.beginPath();
+      ctx.arc(eye.x - headSize * 0.05, eye.y - headSize * 0.05, headSize * 0.06, 0, Math.PI * 2);
+      ctx.fill();
     });
+
+    // Tongue (flickers)
+    if (Math.sin(Date.now() * 0.008) > 0.3) {
+      const tongueLen = headSize * 1.2;
+      const tx = head.x + dir.x * headSize;
+      const ty = head.y + dir.y * headSize;
+      ctx.strokeStyle = '#e74c3c';
+      ctx.lineWidth = Math.max(1, headSize * 0.06);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx + dir.x * tongueLen, ty + dir.y * tongueLen);
+      ctx.stroke();
+      // Fork
+      const forkLen = tongueLen * 0.3;
+      const forkAngle = 0.4;
+      const endX = tx + dir.x * tongueLen;
+      const endY = ty + dir.y * tongueLen;
+      const angle = Math.atan2(dir.y, dir.x);
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX + Math.cos(angle + forkAngle) * forkLen, endY + Math.sin(angle + forkAngle) * forkLen);
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX + Math.cos(angle - forkAngle) * forkLen, endY + Math.sin(angle - forkAngle) * forkLen);
+      ctx.stroke();
+    }
 
     // Boost effect
     if (player.boosting) {
       const tail = segments[segments.length - 1];
       const boostColor = ability === 'fireboost' ? '#f39c12' : color;
       for (let bi = 0; bi < 3; bi++) {
-        ctx.fillStyle = `${boostColor}${Math.floor((0.3 - bi * 0.1) * 255).toString(16).padStart(2, '0')}`;
+        const a = Math.floor((0.3 - bi * 0.1) * 255);
+        ctx.fillStyle = `${boostColor}${a.toString(16).padStart(2, '0')}`;
         ctx.beginPath();
         ctx.arc(
           tail.x + (Math.random() - 0.5) * 20,
           tail.y + (Math.random() - 0.5) * 20,
           baseSize * (0.4 - bi * 0.08),
-          0,
-          Math.PI * 2
+          0, Math.PI * 2
         );
         ctx.fill();
       }
@@ -844,7 +922,7 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    // Magnet gravity well indicator
+    // Magnet gravity well
     if (ability === 'magnet') {
       ctx.strokeStyle = '#5d6d7e40';
       ctx.lineWidth = 2;
@@ -854,13 +932,71 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    // Crown for top 3 players
+    // Crown for top 3
     const rank = this.playerRankings.get(player.id);
     if (rank && rank <= 3) {
       this.renderCrown(ctx, head.x, head.y - headSize - 2, headSize * 0.7, rank);
     }
 
     ctx.globalAlpha = 1;
+  }
+
+  // Draw a smooth path through segments using varying lineWidth
+  // Uses quadratic bezier curves between midpoints for smoothness
+  private drawSmoothSnakePath(
+    ctx: CanvasRenderingContext2D,
+    segs: { x: number; y: number; r: number }[],
+    widthScale: number
+  ): void {
+    if (segs.length < 2) return;
+
+    // Draw the body as connected thick line segments with varying width
+    // We batch segments of similar width together for fewer draw calls
+    let pathStarted = false;
+
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s0 = segs[i];
+      const s1 = segs[i + 1];
+
+      // Skip break markers
+      if (s0.r < 0 || s1.r < 0) {
+        if (pathStarted) {
+          ctx.stroke();
+          pathStarted = false;
+        }
+        continue;
+      }
+
+      // Average radius for this segment pair
+      const avgR = (s0.r + s1.r) * 0.5 * widthScale;
+      ctx.lineWidth = avgR * 2;
+
+      ctx.beginPath();
+
+      if (i === 0 || (i > 0 && segs[i - 1].r < 0)) {
+        // Start of a new sub-path
+        ctx.moveTo(s0.x, s0.y);
+      } else {
+        ctx.moveTo(s0.x, s0.y);
+      }
+
+      // Use midpoint for smooth curve if we have a next-next segment
+      if (i < segs.length - 2 && segs[i + 2].r >= 0) {
+        const s2 = segs[i + 2];
+        const midX = (s1.x + s2.x) * 0.5;
+        const midY = (s1.y + s2.y) * 0.5;
+        ctx.quadraticCurveTo(s1.x, s1.y, midX, midY);
+      } else {
+        ctx.lineTo(s1.x, s1.y);
+      }
+
+      ctx.stroke();
+      pathStarted = false;
+    }
+
+    if (pathStarted) {
+      ctx.stroke();
+    }
   }
 
   private renderPlayerName(ctx: CanvasRenderingContext2D, player: Player): void {
@@ -1040,16 +1176,30 @@ export class GameEngine {
   // ========================
 
   private addParticle(x: number, y: number, color: string, count: number): void {
+    const maxParticles = 200;
     for (let i = 0; i < count; i++) {
-      this.particles.push({
-        x, y,
-        vx: (Math.random() - 0.5) * 4,
-        vy: (Math.random() - 0.5) * 4,
-        color,
-        size: Math.random() * 4 + 2,
-        life: 1,
-        decay: Math.random() * 0.03 + 0.02,
-      });
+      if (this.particles.length >= maxParticles) {
+        // Recycle oldest particle
+        const p = this.particles.shift()!;
+        p.x = x; p.y = y;
+        p.vx = (Math.random() - 0.5) * 4;
+        p.vy = (Math.random() - 0.5) * 4;
+        p.color = color;
+        p.size = Math.random() * 4 + 2;
+        p.life = 1;
+        p.decay = Math.random() * 0.03 + 0.02;
+        this.particles.push(p);
+      } else {
+        this.particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 4,
+          vy: (Math.random() - 0.5) * 4,
+          color,
+          size: Math.random() * 4 + 2,
+          life: 1,
+          decay: Math.random() * 0.03 + 0.02,
+        });
+      }
     }
   }
 
@@ -1111,14 +1261,6 @@ export class GameEngine {
     const g = Math.max(0, ((num >> 8) & 0x00ff) - percent);
     const b = Math.max(0, (num & 0x0000ff) - percent);
     return `rgb(${r}, ${g}, ${b})`;
-  }
-
-  private adjustAlpha(hex: string, alpha: number): string {
-    const num = parseInt(hex.replace('#', ''), 16);
-    const r = num >> 16;
-    const g = (num >> 8) & 0x00ff;
-    const b = num & 0x0000ff;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   public triggerDeath(): void {

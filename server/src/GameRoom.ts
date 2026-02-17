@@ -64,16 +64,16 @@ interface ServerPlayer {
 // ========================
 
 const DEFAULT_CONFIG: GameConfig = {
-  worldSize: 4000,
+  worldSize: 14000,
   maxPlayers: 50,
-  foodCount: 500,
-  baseSpeed: 3,
-  boostSpeed: 6,
+  foodCount: 5000,
+  baseSpeed: 4,
+  boostSpeed: 8,
   boostCost: 0.5,
   growthRate: 1,
   tickRate: 30,
-  segmentSize: 12,
-  foodSize: 8,
+  segmentSize: 10,
+  foodSize: 6,
 };
 
 const SNAKE_COLORS = [
@@ -103,7 +103,7 @@ export class GameRoom {
   private tick = 0;
   private loopInterval: ReturnType<typeof setInterval> | null = null;
   private botIdCounter = 0;
-  private readonly minBots = 5;
+  private readonly minBots = 10;
 
   constructor(config?: Partial<GameConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
