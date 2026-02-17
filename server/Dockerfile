@@ -2,10 +2,10 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+COPY server/package.json server/package-lock.json* ./
 RUN npm ci --omit=dev
 
-COPY dist/ ./dist/
+COPY server/dist/ ./dist/
 
 ENV PORT=8080
 ENV NODE_ENV=production
