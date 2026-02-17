@@ -15,7 +15,7 @@ export class WSClient {
   private handlers: Map<string, MessageHandler[]> = new Map();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 2;
+  private maxReconnectAttempts = 5;
   private isConnected = false;
   private isFallbackMode = false;
   private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -29,26 +29,20 @@ export class WSClient {
 
   constructor(url?: string) {
     this.url = url || import.meta.env.VITE_WS_URL || '';
-    console.log('[WS] Configuration:', {
-      url: this.url,
-      env: import.meta.env.VITE_WS_URL,
-      protocol: window.location.protocol,
-    });
+    if (import.meta.env.DEV) {
+      console.log('[WS] URL:', this.url);
+    }
   }
 
   public connect(joinPayload: JoinPayload): void {
-    console.log('[WS] Attempting connection to:', this.url);
-    
     // No server URL configured → immediate fallback with local bots
     if (!this.url) {
-      console.warn('[WS] No URL configured, starting fallback mode');
       this.startFallbackMode(joinPayload);
       return;
     }
 
     // Prevent mixed content (ws:// from https:// page)
     if (window.location.protocol === 'https:' && this.url.startsWith('ws://')) {
-      console.warn('[WS] Cannot use ws:// from https://, starting local mode');
       this.startFallbackMode(joinPayload);
       return;
     }
@@ -56,18 +50,16 @@ export class WSClient {
     try {
       this.ws = new WebSocket(this.url);
 
-      // Connection timeout: switch to fallback after 3 seconds
+      // Connection timeout: switch to fallback after 5 seconds
       this.connectionTimeout = setTimeout(() => {
         if (!this.isConnected) {
           console.warn('[WS] Connection timeout, switching to fallback mode');
           this.ws?.close();
           this.startFallbackMode(joinPayload);
         }
-      }, 3000);
+      }, 5000);
 
       this.ws.onopen = () => {
-        console.log('[WS] ✅ Connected to server:', this.url);
-        console.log('[WS] WebSocket state:', this.ws?.readyState);
         if (this.connectionTimeout) {
           clearTimeout(this.connectionTimeout);
           this.connectionTimeout = null;
@@ -76,39 +68,33 @@ export class WSClient {
         this.reconnectAttempts = 0;
         this.isFallbackMode = false;
         const joinMsg: WSMessage = { type: 'join', payload: joinPayload, timestamp: Date.now() };
-        console.log('[WS] Sending join message:', joinMsg);
         this.send(joinMsg);
+        console.log('[WS] Connected to server');
       };
 
       this.ws.onmessage = (event) => {
         try {
-          console.log('[WS] 📨 Message received:', event.data.substring(0, 100));
           const msg: WSMessage = JSON.parse(event.data);
-          console.log('[WS] Message type:', msg.type);
           this.emit(msg.type, msg);
         } catch (e) {
-          console.error('[WS] ❌ Failed to parse message:', e, 'Data:', event.data);
+          console.error('[WS] Failed to parse message:', e);
         }
       };
 
       this.ws.onclose = (event) => {
-        console.log('[WS] ❌ Disconnected - Code:', event.code, 'Reason:', event.reason || 'No reason', 'Clean:', event.wasClean);
-        console.log('[WS] Event details:', { code: event.code, reason: event.reason, wasClean: event.wasClean });
         this.isConnected = false;
         if (!this.isFallbackMode) {
+          if (import.meta.env.DEV) {
+            console.log('[WS] Disconnected - Code:', event.code);
+          }
           this.attemptReconnect(joinPayload);
         }
       };
 
-      this.ws.onerror = (error) => {
-        console.error('[WS] ⚠️ Error occurred:', error);
-        console.error('[WS] WebSocket state on error:', this.ws?.readyState);
-        console.warn('[WS] Connection failed, switching to local mode with AI bots');
-        this.ws?.close();
-        this.startFallbackMode(joinPayload);
+      this.ws.onerror = () => {
+        // onclose will fire afterward
       };
     } catch {
-      console.warn('[WS] Cannot connect, starting fallback mode');
       this.startFallbackMode(joinPayload);
     }
   }
@@ -123,11 +109,13 @@ export class WSClient {
     }
 
     this.reconnectAttempts++;
-    const delay = Math.min(500 * this.reconnectAttempts, 2000);
-    console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 16000);
 
     this.reconnectTimer = setTimeout(() => {
-      this.connect(joinPayload);
+      if (!this.isFallbackMode) {
+        this.connect(joinPayload);
+      }
     }, delay);
   }
 

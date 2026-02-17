@@ -49,6 +49,9 @@ const server = createServer((req, res) => {
 // WebSocket server with origin verification
 const wss = new WebSocketServer({ 
   server,
+  clientTracking: true,
+  perMessageDeflate: false, // Disable compression for lower latency
+  maxPayload: 100 * 1024, // 100kb max payload
   verifyClient: (info: { origin: string; secure: boolean; req: IncomingMessage }) => {
     const origin = info.origin || info.req.headers.origin || '';
     console.log(`[WS] Connection attempt from origin: ${origin}`);
@@ -79,37 +82,56 @@ const wss = new WebSocketServer({
 const room = new GameRoom();
 
 wss.on('connection', (ws: WebSocket, req) => {
-  const ip = req.socket.remoteAddress || 'unknown';
   const origin = req.headers.origin || 'unknown';
-  console.log(`[WS] ✅ New connection from ${ip}, origin: ${origin}`);
-  console.log(`[WS] Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`[WS] New connection from origin: ${origin}`);
+
+  // Keep-alive ping every 25 seconds to prevent Railway from closing idle connections
+  let isAlive = true;
+  const pingInterval = setInterval(() => {
+    if (!isAlive) {
+      clearInterval(pingInterval);
+      ws.terminate();
+      return;
+    }
+    isAlive = false;
+    ws.ping();
+  }, 25000);
+
+  ws.on('pong', () => {
+    isAlive = true;
+  });
 
   ws.on('message', (data) => {
     try {
-      console.log(`[WS] 📨 Message received:`, data.toString().substring(0, 100));
       const msg = JSON.parse(data.toString());
-      console.log(`[WS] Message type: ${msg.type}, from player: ${msg.payload?.playerId || 'unknown'}`);
       room.handleMessage(ws, msg);
     } catch (e) {
-      console.error('[WS] ❌ Invalid message:', e);
+      console.error('[WS] Invalid message:', e);
     }
   });
 
-  ws.on('close', (code, reason) => {
-    console.log(`[WS] ❌ Connection closed - Code: ${code}, Reason: ${reason.toString() || 'No reason'}`);
+  ws.on('close', (code) => {
+    if (code !== 1000 && code !== 1001) {
+      console.log(`[WS] Connection closed - Code: ${code}`);
+    }
+    clearInterval(pingInterval);
     room.handleDisconnect(ws);
   });
 
   ws.on('error', (err) => {
-    console.error('[WS] ⚠️ Error:', err.message, err.stack);
+    console.error('[WS] Error:', err.message);
+    clearInterval(pingInterval);
     room.handleDisconnect(ws);
   });
-  
-  console.log('[WS] Event listeners attached, waiting for messages...');
 });
 
 // Start game loop
 room.start();
+
+// Configure server timeouts
+server.timeout = 0; // Disable HTTP timeout for WebSocket connections
+server.keepAliveTimeout = 65000; // 65 seconds
+server.headersTimeout = 66000; // 66 seconds
 
 // Start server
 server.listen(PORT, () => {

@@ -66,7 +66,7 @@ interface ServerPlayer {
 const DEFAULT_CONFIG: GameConfig = {
   worldSize: 14000,
   maxPlayers: 50,
-  foodCount: 5000,
+  foodCount: 1500,
   baseSpeed: 4,
   boostSpeed: 8,
   boostCost: 0.5,
@@ -75,6 +75,10 @@ const DEFAULT_CONFIG: GameConfig = {
   segmentSize: 10,
   foodSize: 6,
 };
+
+// Viewport radius: only send entities within this distance
+const VIEW_RADIUS = 2500;
+const VIEW_RADIUS_SQ = VIEW_RADIUS * VIEW_RADIUS;
 
 const SNAKE_COLORS = [
   '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6',
@@ -456,27 +460,52 @@ export class GameRoom {
     // Broadcast state every other tick (15fps state updates to save bandwidth)
     if (this.tick % 2 !== 0) return;
 
-    const playerData: Record<string, Player> = {};
-    this.players.forEach((sp, id) => {
-      if (sp.player.alive) {
-        playerData[id] = sp.player;
-      }
-    });
+    const now = Date.now();
 
-    const msg = JSON.stringify({
-      type: 'state',
-      payload: {
-        players: playerData,
-        foods: this.foods,
-        tick: this.tick,
-      },
-      timestamp: Date.now(),
-    });
-
+    // Send a culled per-player message to reduce bandwidth
+    // Only entities within VIEW_RADIUS are included
     this.players.forEach((sp) => {
-      if (sp.ws && sp.ws.readyState === WebSocket.OPEN) {
-        sp.ws.send(msg);
+      if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
+
+      const head = sp.player.segments[0];
+      if (!head) return;
+
+      // Cull players: include self + nearby players
+      const playerData: Record<string, Player> = {};
+      this.players.forEach((other, id) => {
+        if (!other.player.alive) return;
+        const otherHead = other.player.segments[0];
+        if (!otherHead) return;
+        const dx = head.x - otherHead.x;
+        const dy = head.y - otherHead.y;
+        if (dx * dx + dy * dy <= VIEW_RADIUS_SQ) {
+          playerData[id] = other.player;
+        }
+      });
+
+      // Cull foods: only nearby
+      const nearbyFoods: Food[] = [];
+      for (const food of this.foods) {
+        const dx = food.position.x - head.x;
+        const dy = food.position.y - head.y;
+        if (dx * dx + dy * dy <= VIEW_RADIUS_SQ) {
+          nearbyFoods.push(food);
+        }
       }
+
+      const msg = JSON.stringify({
+        type: 'state',
+        payload: {
+          players: playerData,
+          foods: nearbyFoods,
+          tick: this.tick,
+        },
+        timestamp: now,
+      });
+
+      try {
+        sp.ws.send(msg);
+      } catch { /* ignore send errors */ }
     });
   }
 
