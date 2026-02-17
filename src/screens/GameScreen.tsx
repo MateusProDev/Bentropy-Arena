@@ -87,7 +87,7 @@ export default function GameScreen() {
     const handleState = (msg: WSMessage) => {
       const payload = msg.payload as StatePayload;
       const localId = user.uid;
-      const isOnline = !ws.fallbackMode;
+      const isOnline = !ws.fallbackMode && ws.connected;
 
       // Separate local player data from remote players
       const remoteMap = new Map<string, Player>();
@@ -120,7 +120,9 @@ export default function GameScreen() {
       setPlayerCount(isOnline ? totalCount : totalCount + 1);
       setConnectionMode(isOnline ? 'online' : 'local');
 
-      // Set engine mode
+      // CRITICAL: Set engine mode - must match connection state
+      // In fallback/local mode: engine handles collisions
+      // In online mode: server handles collisions
       engine.isOnlineMode = isOnline;
     };
 

@@ -15,9 +15,10 @@ export class WSClient {
   private handlers: Map<string, MessageHandler[]> = new Map();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = 2;
   private isConnected = false;
   private isFallbackMode = false;
+  private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Bot simulation
   private bots: Map<string, Player> = new Map();
@@ -47,10 +48,24 @@ export class WSClient {
     try {
       this.ws = new WebSocket(this.url);
 
+      // Connection timeout: switch to fallback after 3 seconds
+      this.connectionTimeout = setTimeout(() => {
+        if (!this.isConnected) {
+          console.warn('[WS] Connection timeout, switching to fallback mode');
+          this.ws?.close();
+          this.startFallbackMode(joinPayload);
+        }
+      }, 3000);
+
       this.ws.onopen = () => {
         console.log('[WS] Connected to server');
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+          this.connectionTimeout = null;
+        }
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        this.isFallbackMode = false;
         this.send({ type: 'join', payload: joinPayload, timestamp: Date.now() });
       };
 
@@ -90,7 +105,7 @@ export class WSClient {
     }
 
     this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
+    const delay = Math.min(500 * this.reconnectAttempts, 2000);
     console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
@@ -579,11 +594,15 @@ export class WSClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+    }
     if (this.botInterval) {
       clearInterval(this.botInterval);
     }
     this.bots.clear();
     this.botFoods = [];
+    this.botDevilFruits = [];
     this.isFallbackMode = false;
     this.ws?.close();
     this.ws = null;
