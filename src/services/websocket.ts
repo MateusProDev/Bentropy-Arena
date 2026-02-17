@@ -66,7 +66,8 @@ export class WSClient {
       }, 3000);
 
       this.ws.onopen = () => {
-        console.log('[WS] Connected to server');
+        console.log('[WS] ✅ Connected to server:', this.url);
+        console.log('[WS] WebSocket state:', this.ws?.readyState);
         if (this.connectionTimeout) {
           clearTimeout(this.connectionTimeout);
           this.connectionTimeout = null;
@@ -74,25 +75,34 @@ export class WSClient {
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.isFallbackMode = false;
-        this.send({ type: 'join', payload: joinPayload, timestamp: Date.now() });
+        const joinMsg = { type: 'join', payload: joinPayload, timestamp: Date.now() };
+        console.log('[WS] Sending join message:', joinMsg);
+        this.send(joinMsg);
       };
 
       this.ws.onmessage = (event) => {
         try {
+          console.log('[WS] 📨 Message received:', event.data.substring(0, 100));
           const msg: WSMessage = JSON.parse(event.data);
+          console.log('[WS] Message type:', msg.type);
           this.emit(msg.type, msg);
         } catch (e) {
-          console.error('[WS] Failed to parse message:', e);
+          console.error('[WS] ❌ Failed to parse message:', e, 'Data:', event.data);
         }
       };
 
-      this.ws.onclose = () => {
-        console.log('[WS] Disconnected');
+      this.ws.onclose = (event) => {
+        console.log('[WS] ❌ Disconnected - Code:', event.code, 'Reason:', event.reason || 'No reason', 'Clean:', event.wasClean);
+        console.log('[WS] Event details:', { code: event.code, reason: event.reason, wasClean: event.wasClean });
         this.isConnected = false;
-        this.attemptReconnect(joinPayload);
+        if (!this.isFallbackMode) {
+          this.attemptReconnect(joinPayload);
+        }
       };
 
-      this.ws.onerror = () => {
+      this.ws.onerror = (error) => {
+        console.error('[WS] ⚠️ Error occurred:', error);
+        console.error('[WS] WebSocket state on error:', this.ws?.readyState);
         console.warn('[WS] Connection failed, switching to local mode with AI bots');
         this.ws?.close();
         this.startFallbackMode(joinPayload);
