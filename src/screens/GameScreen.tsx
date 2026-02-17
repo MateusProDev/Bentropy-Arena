@@ -290,6 +290,20 @@ export default function GameScreen() {
       const state = useGameStore.getState();
       engine.updateState(state.localPlayer, state.players, state.foods, state.devilFruits);
       ws.updateLocalPlayerRef(state.localPlayer);
+
+      // Build rankings map for top 3 crown rendering
+      const allPlayers: { id: string; score: number }[] = [];
+      if (state.localPlayer?.alive) {
+        allPlayers.push({ id: state.localPlayer.id, score: state.localPlayer.score });
+      }
+      state.players.forEach((p) => {
+        if (p.alive) allPlayers.push({ id: p.id, score: p.score });
+      });
+      allPlayers.sort((a, b) => b.score - a.score);
+      const rankMap = new Map<string, number>();
+      allPlayers.forEach((p, i) => rankMap.set(p.id, i + 1));
+      engine.updateRankings(rankMap);
+
       frameRef.current = requestAnimationFrame(syncLoop);
     };
     frameRef.current = requestAnimationFrame(syncLoop);

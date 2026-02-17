@@ -40,6 +40,9 @@ export class GameEngine {
   private screenShake = 0;
   public killedByName: string | null = null;
 
+  // Rankings: playerId -> rank (1-based)
+  private playerRankings: Map<string, number> = new Map();
+
   constructor(canvas: HTMLCanvasElement, config?: GameConfig) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
@@ -61,24 +64,36 @@ export class GameEngine {
   }
 
   private createGridPattern(): void {
+    // Hexagonal dot grid — subtle, modern, dark
+    const size = 80;
     const patternCanvas = document.createElement('canvas');
-    patternCanvas.width = 60;
-    patternCanvas.height = 60;
+    patternCanvas.width = size;
+    patternCanvas.height = Math.round(size * Math.sqrt(3) / 2);
     const pctx = patternCanvas.getContext('2d')!;
+    const ph = patternCanvas.height;
 
-    pctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
-    pctx.lineWidth = 1;
+    // Subtle dot at each hex vertex
+    const drawDot = (x: number, y: number, r: number, alpha: number) => {
+      pctx.fillStyle = `rgba(100, 140, 200, ${alpha})`;
+      pctx.beginPath();
+      pctx.arc(x, y, r, 0, Math.PI * 2);
+      pctx.fill();
+    };
+
+    // Hex grid dots
+    drawDot(0, 0, 1.2, 0.06);
+    drawDot(size, 0, 1.2, 0.06);
+    drawDot(size / 2, ph, 1.2, 0.06);
+    drawDot(size / 2, ph / 2, 0.8, 0.03);
+
+    // Faint hex connecting lines
+    pctx.strokeStyle = 'rgba(80, 120, 180, 0.025)';
+    pctx.lineWidth = 0.5;
     pctx.beginPath();
-    pctx.moveTo(60, 0);
-    pctx.lineTo(60, 60);
-    pctx.moveTo(0, 60);
-    pctx.lineTo(60, 60);
+    pctx.moveTo(0, 0);
+    pctx.lineTo(size / 2, ph);
+    pctx.lineTo(size, 0);
     pctx.stroke();
-
-    pctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
-    pctx.beginPath();
-    pctx.arc(30, 30, 1, 0, Math.PI * 2);
-    pctx.fill();
 
     this.gridPattern = this.ctx.createPattern(patternCanvas, 'repeat');
   }
@@ -130,6 +145,10 @@ export class GameEngine {
     this.remotePlayers = players;
     this.foods = foods;
     if (devilFruits) this.devilFruits = devilFruits;
+  }
+
+  public updateRankings(rankings: Map<string, number>): void {
+    this.playerRankings = rankings;
   }
 
   public start(): void {
@@ -402,7 +421,19 @@ export class GameEngine {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    ctx.fillStyle = '#0a0e1a';
+    // Dark gradient background with subtle blue/purple tint
+    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.7);
+    bgGrad.addColorStop(0, '#0d1225');
+    bgGrad.addColorStop(0.5, '#0a0f1e');
+    bgGrad.addColorStop(1, '#060a14');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Very subtle vignette overlay
+    const vignette = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.8);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.3)');
+    ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
@@ -450,6 +481,19 @@ export class GameEngine {
   }
 
   private renderGrid(ctx: CanvasRenderingContext2D): void {
+    // Ambient glow around player position for depth
+    if (this.localPlayer?.alive) {
+      const head = this.localPlayer.segments[0];
+      if (head) {
+        const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 600);
+        glow.addColorStop(0, 'rgba(60, 100, 180, 0.03)');
+        glow.addColorStop(0.5, 'rgba(40, 70, 140, 0.015)');
+        glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(head.x - 600, head.y - 600, 1200, 1200);
+      }
+    }
+
     if (this.gridPattern) {
       ctx.fillStyle = this.gridPattern;
       ctx.fillRect(0, 0, this.config.worldSize, this.config.worldSize);
@@ -458,18 +502,43 @@ export class GameEngine {
 
   private renderWorldBorder(ctx: CanvasRenderingContext2D): void {
     const ws = this.config.worldSize;
-    ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 4;
+
+    // Danger zone: gradient fade near border
+    const dangerSize = 150;
+    const dangerAlpha = 'rgba(239, 68, 68, 0.06)';
+    const dangerClear = 'rgba(239, 68, 68, 0)';
+
+    // Top
+    const gTop = ctx.createLinearGradient(0, 0, 0, dangerSize);
+    gTop.addColorStop(0, dangerAlpha); gTop.addColorStop(1, dangerClear);
+    ctx.fillStyle = gTop; ctx.fillRect(0, 0, ws, dangerSize);
+    // Bottom
+    const gBot = ctx.createLinearGradient(0, ws, 0, ws - dangerSize);
+    gBot.addColorStop(0, dangerAlpha); gBot.addColorStop(1, dangerClear);
+    ctx.fillStyle = gBot; ctx.fillRect(0, ws - dangerSize, ws, dangerSize);
+    // Left
+    const gLeft = ctx.createLinearGradient(0, 0, dangerSize, 0);
+    gLeft.addColorStop(0, dangerAlpha); gLeft.addColorStop(1, dangerClear);
+    ctx.fillStyle = gLeft; ctx.fillRect(0, 0, dangerSize, ws);
+    // Right
+    const gRight = ctx.createLinearGradient(ws, 0, ws - dangerSize, 0);
+    gRight.addColorStop(0, dangerAlpha); gRight.addColorStop(1, dangerClear);
+    ctx.fillStyle = gRight; ctx.fillRect(ws - dangerSize, 0, dangerSize, ws);
+
+    // Border line
+    ctx.strokeStyle = '#ef444480';
+    ctx.lineWidth = 3;
     ctx.shadowColor = '#ef4444';
-    ctx.shadowBlur = 20;
+    ctx.shadowBlur = 15;
     ctx.strokeRect(5, 5, ws - 10, ws - 10);
     ctx.shadowBlur = 0;
 
+    // Corner markers
     const corners = [[0, 0], [ws, 0], [0, ws], [ws, ws]];
     corners.forEach(([cx, cy]) => {
-      ctx.fillStyle = '#ef4444';
+      ctx.fillStyle = '#ef444460';
       ctx.beginPath();
-      ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
       ctx.fill();
     });
   }
@@ -768,6 +837,12 @@ export class GameEngine {
       ctx.stroke();
     }
 
+    // Crown for top 3 players
+    const rank = this.playerRankings.get(player.id);
+    if (rank && rank <= 3) {
+      this.renderCrown(ctx, head.x, head.y - headSize - 2, headSize * 0.7, rank);
+    }
+
     ctx.globalAlpha = 1;
   }
 
@@ -783,15 +858,24 @@ export class GameEngine {
     const yOffset = this.config.segmentSize * 2.5 * fontScale;
     const y = head.y - yOffset;
 
+    // Crown prefix for top 3
+    const rank = this.playerRankings.get(player.id);
+    let prefix = '';
+    if (rank === 1) prefix = '\u{1F451} ';
+    else if (rank === 2) prefix = '\u{1FA99} ';
+    else if (rank === 3) prefix = '\u{1F949} ';
+
+    const displayName = prefix + player.name;
+
     ctx.font = `bold ${nameFontSize}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillText(player.name, head.x + 1, y + 1);
+    ctx.fillText(displayName, head.x + 1, y + 1);
 
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(player.name, head.x, y);
+    ctx.fillStyle = rank === 1 ? '#ffd700' : rank === 2 ? '#c0c0c0' : rank === 3 ? '#cd7f32' : '#ffffff';
+    ctx.fillText(displayName, head.x, y);
 
     ctx.font = `${scoreFontSize}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = player.color;
@@ -800,8 +884,58 @@ export class GameEngine {
     if (player.activeAbility) {
       ctx.font = `${Math.round(9 * fontScale)}px Inter, system-ui, sans-serif`;
       ctx.fillStyle = '#fbbf24';
-      ctx.fillText(`⚡ ${player.activeAbility.toUpperCase()}`, head.x, y - nameFontSize - scoreFontSize - 6);
+      ctx.fillText(`\u26A1 ${player.activeAbility.toUpperCase()}`, head.x, y - nameFontSize - scoreFontSize - 6);
     }
+  }
+
+  private renderCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, rank: number): void {
+    // Crown colors: gold, silver, bronze
+    const colors = {
+      1: { fill: '#ffd700', stroke: '#b8960f', glow: '#ffd70060' },
+      2: { fill: '#c0c0c0', stroke: '#808080', glow: '#c0c0c040' },
+      3: { fill: '#cd7f32', stroke: '#8b5a2b', glow: '#cd7f3240' },
+    } as const;
+    const c = colors[rank as 1 | 2 | 3];
+    if (!c) return;
+
+    const s = size;
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // Subtle glow
+    ctx.shadowColor = c.glow;
+    ctx.shadowBlur = 8;
+
+    // Crown shape
+    ctx.beginPath();
+    ctx.moveTo(-s, s * 0.3);
+    ctx.lineTo(-s * 0.8, -s * 0.4);
+    ctx.lineTo(-s * 0.35, s * 0.05);
+    ctx.lineTo(0, -s * 0.6);
+    ctx.lineTo(s * 0.35, s * 0.05);
+    ctx.lineTo(s * 0.8, -s * 0.4);
+    ctx.lineTo(s, s * 0.3);
+    ctx.closePath();
+
+    ctx.fillStyle = c.fill;
+    ctx.fill();
+    ctx.strokeStyle = c.stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Small gems on crown tips
+    const gems = [[-s * 0.8, -s * 0.4], [0, -s * 0.6], [s * 0.8, -s * 0.4]];
+    gems.forEach(([gx, gy]) => {
+      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.arc(gx, gy, s * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
   }
 
   private renderMinimap(ctx: CanvasRenderingContext2D, w: number, _h: number): void {

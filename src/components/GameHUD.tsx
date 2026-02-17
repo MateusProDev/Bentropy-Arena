@@ -118,37 +118,50 @@ export default function GameHUD({
         );
       })()}
 
-      {/* ======== Desktop-only: Leaderboard ======== */}
-      {!isMobile && (
-        <div className="fixed z-40" style={{ top: 150, right: 14, width: 190 }}>
-          <div className="glass px-3 py-2">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">🏆 Top</span>
-              <div className="flex items-center gap-1.5 text-[10px]">
-                <div
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    connectionMode === 'online' ? 'bg-emerald-400' : 'bg-yellow-400'
-                  }`}
-                />
-                <span className="text-gray-500">{ping}ms</span>
-              </div>
+      {/* ======== Ranking Top 10 — below score (left side) ======== */}
+      {!compact && (
+        <div
+          className="fixed z-40"
+          style={{ top: activeAbility ? 100 : 62, left: 8, width: isMobile ? 150 : 185 }}
+        >
+          <div className="glass px-2 py-1.5" style={{ background: 'rgba(0,0,0,0.55)' }}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <span style={{ fontSize: 10 }}>🏆</span>
+              <span className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Ranking</span>
             </div>
-            <div className="flex flex-col gap-0.5">
-              {leaderboard.slice(0, 8).map((p, i) => (
-                <div
-                  key={p.name + i}
-                  className={`flex items-center gap-2 text-xs py-0.5 px-1 rounded ${
-                    p.isLocal ? 'bg-white/10' : ''
-                  }`}
-                >
-                  <span className="text-gray-500 w-4 text-right font-mono text-[10px]">{i + 1}</span>
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                  <span className={`truncate flex-1 ${p.isLocal ? 'text-white font-semibold' : 'text-gray-400'}`}>
-                    {p.name}
-                  </span>
-                  <span className="text-gray-500 tabular-nums text-[10px]">{p.score.toLocaleString()}</span>
-                </div>
-              ))}
+            <div className="flex flex-col gap-px">
+              {leaderboard.slice(0, 10).map((p, i) => {
+                const crown = i === 0 ? '👑 ' : i === 1 ? '🪙 ' : i === 2 ? '🥉 ' : '';
+                const nameColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : undefined;
+                return (
+                  <div
+                    key={p.name + i}
+                    className={`flex items-center gap-1.5 py-px px-1 rounded ${
+                      p.isLocal ? 'bg-white/10' : ''
+                    }`}
+                    style={{ fontSize: isMobile ? 9 : 11 }}
+                  >
+                    <span className="text-gray-500 w-3 text-right font-mono" style={{ fontSize: isMobile ? 8 : 9 }}>
+                      {i + 1}
+                    </span>
+                    <div
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ backgroundColor: p.color }}
+                    />
+                    <span
+                      className={`truncate flex-1 ${
+                        p.isLocal ? 'font-semibold' : ''
+                      }`}
+                      style={{ color: nameColor || (p.isLocal ? '#fff' : '#9ca3af') }}
+                    >
+                      {crown}{p.name}
+                    </span>
+                    <span className="text-gray-500 tabular-nums" style={{ fontSize: isMobile ? 8 : 9 }}>
+                      {p.score.toLocaleString()}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
