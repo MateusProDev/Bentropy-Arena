@@ -81,7 +81,7 @@ export class WSClient {
         }
       };
 
-      this.ws.onclose = (event) => {
+      this.ws.onclose = (event) => { 
         this.isConnected = false;
         if (!this.isFallbackMode) {
           if (import.meta.env.DEV) {
