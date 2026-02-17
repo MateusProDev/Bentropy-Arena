@@ -462,8 +462,6 @@ export class GameRoom {
 
     const now = Date.now();
 
-    // Send a culled per-player message to reduce bandwidth
-    // Only entities within VIEW_RADIUS are included
     this.players.forEach((sp) => {
       if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
 
@@ -471,20 +469,54 @@ export class GameRoom {
       if (!head) return;
 
       // Cull players: include self + nearby players
-      const playerData: Record<string, Player> = {};
+      // Send fewer segments for distant snakes to save bandwidth
+      const playerData: Record<string, any> = {};
+    this.players.forEach((sp, currentPlayerId) => {
+      if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
+
+      const head = sp.player.segments[0];
+      if (!head) return;
+
+      // Cull players: include self + nearby players
+      // Send fewer segments for distant snakes to save bandwidth
+      const playerData: Record<string, any> = {};
       this.players.forEach((other, id) => {
         if (!other.player.alive) return;
         const otherHead = other.player.segments[0];
         if (!otherHead) return;
         const dx = head.x - otherHead.x;
         const dy = head.y - otherHead.y;
-        if (dx * dx + dy * dy <= VIEW_RADIUS_SQ) {
-          playerData[id] = other.player;
-        }
+        const distSq = dx * dx + dy * dy;
+        if (distSq > VIEW_RADIUS_SQ) return;
+
+        // Limit segments based on distance: close = full, far = fewer
+        const isSelf = id === currentPlayerId;
+        const maxSegs = isSelf
+          ? other.player.segments.length          // self: all segments for local rendering
+          : distSq < 800 * 800
+            ? other.player.segments.length         // very close: full
+            : distSq < 1500 * 1500
+              ? Math.min(other.player.segments.length, 80)  // medium: up to 80
+              : Math.min(other.player.segments.length, 30); // far: up to 30
+
+        playerData[id] = {
+          id: other.player.id,
+          name: other.player.name,
+          photoURL: other.player.photoURL,
+          color: other.player.color,
+          segments: other.player.segments.slice(0, maxSegs),
+          direction: other.player.direction,
+          score: other.player.score,
+          length: other.player.length,
+          alive: other.player.alive,
+          boosting: other.player.boosting,
+          speed: other.player.speed,
+          lastUpdate: other.player.lastUpdate,
+        };
       });
 
-      // Cull foods: only nearby
-      const nearbyFoods: Food[] = [];
+      // Cull foods: only nearby, send minimal fields
+      const nearbyFoods: { id: string; position: Vector2D; color: string; size: number; value: number }[] = [];
       for (const food of this.foods) {
         const dx = food.position.x - head.x;
         const dy = food.position.y - head.y;
@@ -493,18 +525,12 @@ export class GameRoom {
         }
       }
 
-      const msg = JSON.stringify({
-        type: 'state',
-        payload: {
-          players: playerData,
-          foods: nearbyFoods,
-          tick: this.tick,
-        },
-        timestamp: now,
-      });
-
       try {
-        sp.ws.send(msg);
+        sp.ws.send(JSON.stringify({
+          type: 'state',
+          payload: { players: playerData, foods: nearbyFoods, tick: this.tick },
+          timestamp: now,
+        }));
       } catch { /* ignore send errors */ }
     });
   }
