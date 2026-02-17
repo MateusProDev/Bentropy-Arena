@@ -81,24 +81,28 @@ const room = new GameRoom();
 wss.on('connection', (ws: WebSocket, req) => {
   const ip = req.socket.remoteAddress || 'unknown';
   const origin = req.headers.origin || 'unknown';
-  console.log(`[WS] ✅ New connection from ${ip}, origin: ${origin}`);\n  console.log(`[WS] Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`[WS] ✅ New connection from ${ip}, origin: ${origin}`);
+  console.log(`[WS] Headers:`, JSON.stringify(req.headers, null, 2));
 
   ws.on('message', (data) => {
     try {
       console.log(`[WS] 📨 Message received:`, data.toString().substring(0, 100));
       const msg = JSON.parse(data.toString());
-      console.log(`[WS] Message type: ${msg.type}, from player: ${msg.payload?.playerId || 'unknown'}`);\n      room.handleMessage(ws, msg);
+      console.log(`[WS] Message type: ${msg.type}, from player: ${msg.payload?.playerId || 'unknown'}`);
+      room.handleMessage(ws, msg);
     } catch (e) {
       console.error('[WS] ❌ Invalid message:', e);
     }
   });
 
   ws.on('close', (code, reason) => {
-    console.log(`[WS] ❌ Connection closed - Code: ${code}, Reason: ${reason.toString() || 'No reason'}`);\n    room.handleDisconnect(ws);
+    console.log(`[WS] ❌ Connection closed - Code: ${code}, Reason: ${reason.toString() || 'No reason'}`);
+    room.handleDisconnect(ws);
   });
 
   ws.on('error', (err) => {
-    console.error('[WS] ⚠️ Error:', err.message, err.stack);\n    room.handleDisconnect(ws);
+    console.error('[WS] ⚠️ Error:', err.message, err.stack);
+    room.handleDisconnect(ws);
   });
   
   console.log('[WS] Event listeners attached, waiting for messages...');
