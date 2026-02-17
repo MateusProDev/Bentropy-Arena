@@ -74,3 +74,5 @@ api/              # Serverless functions (Vercel)
 ## Licenca
 
 MIT
+
+<!-- Deploy trigger 2026-02-17 15:11:54 -->
