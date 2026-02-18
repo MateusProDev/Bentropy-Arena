@@ -45,6 +45,43 @@ export const SNAKE_ACCESSORIES: AccessoryDef[] = [
   { id: 'devil_horns',     name: 'Chifres',          emoji: '😈', category: 'head' },
 ];
 
+// ============================================================
+// Snake Body Themes (patterns & designs on the body)
+// ============================================================
+
+export type SnakeTheme =
+  | 'none'
+  | 'stripes'
+  | 'zigzag'
+  | 'dots'
+  | 'galaxy'
+  | 'flames'
+  | 'lightning'
+  | 'sakura'
+  | 'scales'
+  | 'neon'
+  | 'camo';
+
+export interface ThemeDef {
+  id: SnakeTheme;
+  name: string;
+  emoji: string;
+}
+
+export const SNAKE_THEMES: ThemeDef[] = [
+  { id: 'none',      name: 'Padrão',      emoji: '⬜' },
+  { id: 'stripes',   name: 'Listras',     emoji: '🦓' },
+  { id: 'zigzag',    name: 'Zigzag',      emoji: '〰️' },
+  { id: 'dots',      name: 'Bolinhas',    emoji: '⚫' },
+  { id: 'galaxy',    name: 'Galáxia',     emoji: '🌌' },
+  { id: 'flames',    name: 'Chamas',      emoji: '🔥' },
+  { id: 'lightning', name: 'Raio',        emoji: '⚡' },
+  { id: 'sakura',    name: 'Sakura',      emoji: '🌸' },
+  { id: 'scales',    name: 'Escamas',     emoji: '🐉' },
+  { id: 'neon',      name: 'Neon',        emoji: '💜' },
+  { id: 'camo',      name: 'Camuflagem',  emoji: '🌿' },
+];
+
 export interface Player {
   id: string;
   name: string;
@@ -61,6 +98,7 @@ export interface Player {
   activeAbility: DevilFruitAbility | null;
   abilityEndTime: number;
   accessory?: SnakeAccessory;
+  theme?: SnakeTheme;
 }
 
 export interface Food {
