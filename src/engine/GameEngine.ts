@@ -19,6 +19,13 @@ export class GameEngine {
   private joystickDirection: Vector2D | null = null;
   private zoom = 1;
   private targetZoom = 1;
+  private frameCount = 0;
+  private lastFps = 60;
+  private fpsFrames = 0;
+  private fpsTimer = 0;
+  private boostTrail: { x: number; y: number; life: number; color: string }[] = [];
+  private deathFlash = 0;
+  private killFeedEntries: { text: string; life: number }[] = [];
 
   // Online mode: when true, collision detection is server-authoritative
   public isOnlineMode = false;
@@ -170,6 +177,16 @@ export class GameEngine {
   };
 
   private update(): void {
+    this.frameCount++;
+    // FPS counter
+    this.fpsFrames++;
+    const now = performance.now();
+    if (now - this.fpsTimer > 1000) {
+      this.lastFps = this.fpsFrames;
+      this.fpsFrames = 0;
+      this.fpsTimer = now;
+    }
+
     if (!this.localPlayer?.alive) return;
 
     const ability = this.localPlayer.activeAbility;
@@ -180,7 +197,7 @@ export class GameEngine {
       this.localPlayer.boosting = true;
     }
 
-    // Calculate direction
+    // Calculate direction from mouse or joystick
     if (this.joystickDirection) {
       this.targetDirection = { ...this.joystickDirection };
     } else {
@@ -241,6 +258,34 @@ export class GameEngine {
     }
 
     this.localPlayer.boosting = this.isBoosting;
+
+    // Boost trail particles
+    if (this.isBoosting && this.localPlayer.segments.length > 2) {
+      const tail = this.localPlayer.segments[this.localPlayer.segments.length - 1];
+      const boostColor = ability === 'fireboost' ? '#f39c12' : this.localPlayer.color;
+      this.boostTrail.push({ x: tail.x + (Math.random()-0.5)*8, y: tail.y + (Math.random()-0.5)*8, life: 1, color: boostColor });
+      if (this.boostTrail.length > 60) this.boostTrail.shift();
+    }
+    // decay trail
+    for (let i = this.boostTrail.length - 1; i >= 0; i--) {
+      this.boostTrail[i].life -= 0.05;
+      if (this.boostTrail[i].life <= 0) this.boostTrail.splice(i, 1);
+    }
+
+    // Ability auto-expire check (belt-and-suspenders)
+    if (ability && this.localPlayer.abilityEndTime > 0 && Date.now() > this.localPlayer.abilityEndTime) {
+      this.localPlayer.activeAbility = null;
+      this.localPlayer.abilityEndTime = 0;
+      this.onAbilityExpired?.();
+    }
+
+    // Kill feed decay
+    for (let i = this.killFeedEntries.length - 1; i >= 0; i--) {
+      this.killFeedEntries[i].life -= 1/180;
+      if (this.killFeedEntries[i].life <= 0) this.killFeedEntries.splice(i, 1);
+    }
+
+    if (this.deathFlash > 0) this.deathFlash -= 0.04;
 
     // Magnet ability: attract nearby food
     if (ability === 'magnet') {
@@ -437,20 +482,15 @@ export class GameEngine {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    // Dark gradient background with subtle blue/purple tint
-    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.7);
-    bgGrad.addColorStop(0, '#0d1225');
-    bgGrad.addColorStop(0.5, '#0a0f1e');
-    bgGrad.addColorStop(1, '#060a14');
-    ctx.fillStyle = bgGrad;
+    // Solid dark background (faster than radial gradient every frame)
+    ctx.fillStyle = '#080d1a';
     ctx.fillRect(0, 0, w, h);
 
-    // Very subtle vignette overlay
-    const vignette = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.8);
-    vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(1, 'rgba(0,0,0,0.3)');
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, w, h);
+    // Death flash overlay
+    if (this.deathFlash > 0) {
+      ctx.fillStyle = `rgba(239,68,68,${this.deathFlash * 0.35})`;
+      ctx.fillRect(0, 0, w, h);
+    }
 
     ctx.save();
     if (this.screenShake > 0.5) {
@@ -466,47 +506,55 @@ export class GameEngine {
 
     this.renderGrid(ctx);
     this.renderWorldBorder(ctx);
+    this.renderBoostTrail(ctx);
     this.renderFoods(ctx);
     this.renderDevilFruits(ctx);
 
+    // Sort players: local player always on top
+    const renderOrder: Player[] = [];
     this.remotePlayers.forEach((player) => {
-      if (player.alive && player.id !== this.localPlayer?.id) {
-        this.renderSnake(ctx, player);
-      }
+      if (player.alive && player.id !== this.localPlayer?.id) renderOrder.push(player);
     });
-
-    if (this.localPlayer?.alive) {
-      this.renderSnake(ctx, this.localPlayer, true);
-    }
+    // Render remote snakes body first, then local
+    renderOrder.forEach(p => this.renderSnake(ctx, p));
+    if (this.localPlayer?.alive) this.renderSnake(ctx, this.localPlayer, true);
 
     this.renderParticles(ctx);
 
-    this.remotePlayers.forEach((player) => {
-      if (player.alive && player.id !== this.localPlayer?.id) {
-        this.renderPlayerName(ctx, player);
-      }
-    });
-    if (this.localPlayer?.alive) {
-      this.renderPlayerName(ctx, this.localPlayer);
-    }
+    // Names after bodies (always on top)
+    renderOrder.forEach(p => this.renderPlayerName(ctx, p));
+    if (this.localPlayer?.alive) this.renderPlayerName(ctx, this.localPlayer);
 
     ctx.restore();
     ctx.restore();
 
     this.renderMinimap(ctx, w, h);
+    this.renderKillFeed(ctx, w);
+    this.renderFPSCounter(ctx);
+  }
+
+  private renderBoostTrail(ctx: CanvasRenderingContext2D): void {
+    for (const t of this.boostTrail) {
+      ctx.globalAlpha = t.life * 0.6;
+      ctx.fillStyle = t.color;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.life * 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   private renderGrid(ctx: CanvasRenderingContext2D): void {
-    // Ambient glow around player position for depth
+    // Ambient glow around player
     if (this.localPlayer?.alive) {
       const head = this.localPlayer.segments[0];
       if (head) {
-        const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 600);
-        glow.addColorStop(0, 'rgba(60, 100, 180, 0.03)');
-        glow.addColorStop(0.5, 'rgba(40, 70, 140, 0.015)');
-        glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 800);
+        glow.addColorStop(0, 'rgba(16, 185, 129, 0.04)');
+        glow.addColorStop(0.4, 'rgba(60, 100, 180, 0.02)');
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = glow;
-        ctx.fillRect(head.x - 600, head.y - 600, 1200, 1200);
+        ctx.fillRect(head.x - 800, head.y - 800, 1600, 1600);
       }
     }
 
@@ -519,102 +567,84 @@ export class GameEngine {
   private renderWorldBorder(ctx: CanvasRenderingContext2D): void {
     const ws = this.config.worldSize;
 
-    // Danger zone: gradient fade near border
-    const dangerSize = 150;
-    const dangerAlpha = 'rgba(239, 68, 68, 0.06)';
-    const dangerClear = 'rgba(239, 68, 68, 0)';
+    // Pulsing danger zone
+    const pulse = 0.04 + Math.sin(this.frameCount * 0.04) * 0.02;
+    const dangerSize = 250;
 
+    const paintEdge = (_x0: number, _y0: number, _x1: number, _y1: number, _w: number, _h: number) => void 0;
+    void paintEdge;
     // Top
-    const gTop = ctx.createLinearGradient(0, 0, 0, dangerSize);
-    gTop.addColorStop(0, dangerAlpha); gTop.addColorStop(1, dangerClear);
-    ctx.fillStyle = gTop; ctx.fillRect(0, 0, ws, dangerSize);
+    { const g = ctx.createLinearGradient(0,0,0,dangerSize); g.addColorStop(0,`rgba(239,68,68,${pulse})`); g.addColorStop(1,'rgba(239,68,68,0)'); ctx.fillStyle=g; ctx.fillRect(0,0,ws,dangerSize); }
     // Bottom
-    const gBot = ctx.createLinearGradient(0, ws, 0, ws - dangerSize);
-    gBot.addColorStop(0, dangerAlpha); gBot.addColorStop(1, dangerClear);
-    ctx.fillStyle = gBot; ctx.fillRect(0, ws - dangerSize, ws, dangerSize);
+    { const g = ctx.createLinearGradient(0,ws,0,ws-dangerSize); g.addColorStop(0,`rgba(239,68,68,${pulse})`); g.addColorStop(1,'rgba(239,68,68,0)'); ctx.fillStyle=g; ctx.fillRect(0,ws-dangerSize,ws,dangerSize); }
     // Left
-    const gLeft = ctx.createLinearGradient(0, 0, dangerSize, 0);
-    gLeft.addColorStop(0, dangerAlpha); gLeft.addColorStop(1, dangerClear);
-    ctx.fillStyle = gLeft; ctx.fillRect(0, 0, dangerSize, ws);
+    { const g = ctx.createLinearGradient(0,0,dangerSize,0); g.addColorStop(0,`rgba(239,68,68,${pulse})`); g.addColorStop(1,'rgba(239,68,68,0)'); ctx.fillStyle=g; ctx.fillRect(0,0,dangerSize,ws); }
     // Right
-    const gRight = ctx.createLinearGradient(ws, 0, ws - dangerSize, 0);
-    gRight.addColorStop(0, dangerAlpha); gRight.addColorStop(1, dangerClear);
-    ctx.fillStyle = gRight; ctx.fillRect(ws - dangerSize, 0, dangerSize, ws);
+    { const g = ctx.createLinearGradient(ws,0,ws-dangerSize,0); g.addColorStop(0,`rgba(239,68,68,${pulse})`); g.addColorStop(1,'rgba(239,68,68,0)'); ctx.fillStyle=g; ctx.fillRect(ws-dangerSize,0,dangerSize,ws); }
 
-    // Border line
-    ctx.strokeStyle = '#ef444480';
-    ctx.lineWidth = 3;
+    // Border glow line
+    const borderPulse = 0.4 + Math.sin(this.frameCount * 0.05) * 0.2;
+    ctx.strokeStyle = `rgba(239,68,68,${borderPulse})`;
+    ctx.lineWidth = 4;
     ctx.shadowColor = '#ef4444';
-    ctx.shadowBlur = 15;
-    ctx.strokeRect(5, 5, ws - 10, ws - 10);
+    ctx.shadowBlur = 20;
+    ctx.strokeRect(4, 4, ws - 8, ws - 8);
     ctx.shadowBlur = 0;
-
-    // Corner markers
-    const corners = [[0, 0], [ws, 0], [0, ws], [ws, ws]];
-    corners.forEach(([cx, cy]) => {
-      ctx.fillStyle = '#ef444460';
-      ctx.beginPath();
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.fill();
-    });
   }
 
   private renderFoods(ctx: CanvasRenderingContext2D): void {
     const camX = this.camera.x;
     const camY = this.camera.y;
-    const w = this.canvas.width / this.zoom;
-    const h = this.canvas.height / this.zoom;
-    const foodMargin = 30;
-    const now = Date.now();
+    const vw = this.canvas.width / this.zoom;
+    const vh = this.canvas.height / this.zoom;
+    const margin = 40;
+    const t = this.frameCount;
 
-    // Batch foods by color to minimize fillStyle changes
-    const batches = new Map<string, { x: number; y: number; s: number }[]>();
+    type FoodBatch = { x: number; y: number; s: number }[];
+    const glow = new Map<string, FoodBatch>();
+    const body = new Map<string, FoodBatch>();
 
     for (let fi = 0; fi < this.foods.length; fi++) {
       const food = this.foods[fi];
       const fx = food.position.x;
       const fy = food.position.y;
-      if (fx < camX - foodMargin || fx > camX + w + foodMargin ||
-          fy < camY - foodMargin || fy > camY + h + foodMargin) continue;
+      if (fx < camX - margin || fx > camX + vw + margin ||
+          fy < camY - margin || fy > camY + vh + margin) continue;
 
-      const pulse = 1 + Math.sin(now * 0.005 + fx) * 0.12;
-      const size = food.size * pulse;
+      // Each food pulses on its own offset (cheap: no Date.now())
+      const pulse = 1 + Math.sin(t * 0.04 + fx * 0.03 + fy * 0.02) * 0.13;
+      const s = food.size * pulse;
 
-      let batch = batches.get(food.color);
-      if (!batch) { batch = []; batches.set(food.color, batch); }
-      batch.push({ x: fx, y: fy, s: size });
+      if (!glow.has(food.color)) { glow.set(food.color, []); body.set(food.color, []); }
+      glow.get(food.color)!.push({ x: fx, y: fy, s: s * 2.2 });
+      body.get(food.color)!.push({ x: fx, y: fy, s });
     }
 
-    // Draw glow layer (batched)
-    batches.forEach((foods, color) => {
-      ctx.fillStyle = color + '25';
+    // Glow halos
+    glow.forEach((foods, color) => {
+      ctx.fillStyle = color + '22';
       ctx.beginPath();
-      for (const f of foods) {
-        ctx.moveTo(f.x + f.s * 1.8, f.y);
-        ctx.arc(f.x, f.y, f.s * 1.8, 0, Math.PI * 2);
-      }
+      for (const f of foods) { ctx.moveTo(f.x+f.s,f.y); ctx.arc(f.x,f.y,f.s,0,Math.PI*2); }
       ctx.fill();
     });
 
-    // Draw food bodies (batched)
-    batches.forEach((foods, color) => {
+    // Bodies
+    body.forEach((foods, color) => {
       ctx.fillStyle = color;
       ctx.beginPath();
-      for (const f of foods) {
-        ctx.moveTo(f.x + f.s, f.y);
-        ctx.arc(f.x, f.y, f.s, 0, Math.PI * 2);
-      }
+      for (const f of foods) { ctx.moveTo(f.x+f.s,f.y); ctx.arc(f.x,f.y,f.s,0,Math.PI*2); }
       ctx.fill();
     });
 
-    // Highlight dots (single batch for all)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    // Specular highlight pass
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
     ctx.beginPath();
-    batches.forEach((foods) => {
+    body.forEach((foods) => {
       for (const f of foods) {
         const hr = f.s * 0.3;
-        ctx.moveTo(f.x - f.s * 0.15 + hr, f.y - f.s * 0.15);
-        ctx.arc(f.x - f.s * 0.15, f.y - f.s * 0.15, hr, 0, Math.PI * 2);
+        const hx = f.x - f.s*0.2;
+        const hy = f.y - f.s*0.2;
+        ctx.moveTo(hx+hr,hy); ctx.arc(hx,hy,hr,0,Math.PI*2);
       }
     });
     ctx.fill();
@@ -727,10 +757,29 @@ export class GameEngine {
     const color = player.color;
     const ability = player.activeAbility;
 
-    // Dynamic thickness: starts normal, grows as snake eats
+    // Dynamic thickness grows logarithmically — fatter snakes look menacing
     const len = Math.max(player.length, 1);
     const thicknessMult = this.getThicknessMult(len);
     const baseSize = segSize * thicknessMult;
+
+    // Shadow beneath snake for 3D depth effect
+    if (!isLocal) {
+      const shadowOff = baseSize * 0.4;
+      ctx.save();
+      ctx.globalAlpha = 0.12;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = baseSize * 1.8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < Math.min(segments.length, 30); i++) {
+        const s = segments[i];
+        if (i === 0) ctx.moveTo(s.x + shadowOff, s.y + shadowOff);
+        else ctx.lineTo(s.x + shadowOff, s.y + shadowOff);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Ability visual: invisibility / phasing
     if (ability === 'invisibility') {
@@ -1094,69 +1143,86 @@ export class GameEngine {
 
   private renderMinimap(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
     const isMobile = w < 768;
-    const mmSize = isMobile ? 90 : 140;
-    const mmMargin = isMobile ? 8 : 14;
+    const mmSize = isMobile ? 95 : 150;
+    const mmMargin = isMobile ? 8 : 16;
     const mmX = w - mmSize - mmMargin;
     const mmY = mmMargin;
     const scale = mmSize / this.config.worldSize;
 
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    // Background
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(mmX, mmY, mmSize, mmSize, isMobile ? 4 : 8);
+    ctx.roundRect(mmX - 1, mmY - 1, mmSize + 2, mmSize + 2, isMobile ? 6 : 10);
     ctx.fill();
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
-    ctx.lineWidth = isMobile ? 1 : 2;
+    // Clip to minimap bounds
+    ctx.beginPath();
+    ctx.roundRect(mmX, mmY, mmSize, mmSize, isMobile ? 5 : 9);
+    ctx.clip();
+
+    // Subtle world fill
+    ctx.fillStyle = 'rgba(16,30,60,0.4)';
+    ctx.fillRect(mmX, mmY, mmSize, mmSize);
+
+    // Danger border tint
+    ctx.strokeStyle = 'rgba(239,68,68,0.25)';
+    ctx.lineWidth = 2;
     ctx.strokeRect(mmX + 2, mmY + 2, mmSize - 4, mmSize - 4);
 
-    // Food dots
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
-    for (let i = 0; i < this.foods.length; i += 30) {
+    // Food density
+    ctx.fillStyle = 'rgba(16,185,129,0.18)';
+    for (let i = 0; i < this.foods.length; i += 20) {
       const f = this.foods[i];
       if (!f) continue;
-      ctx.fillRect(mmX + f.position.x * scale - 0.5, mmY + f.position.y * scale - 0.5, 1, 1);
+      ctx.fillRect(mmX + f.position.x * scale - 0.5, mmY + f.position.y * scale - 0.5, 1.5, 1.5);
     }
 
-    // Devil fruit dots on minimap
+    // Devil fruit blips (larger + colored)
     this.devilFruits.forEach((df) => {
       ctx.fillStyle = df.color;
+      ctx.shadowColor = df.glowColor;
+      ctx.shadowBlur = 4;
       ctx.beginPath();
-      ctx.arc(mmX + df.position.x * scale, mmY + df.position.y * scale, isMobile ? 2 : 3, 0, Math.PI * 2);
+      ctx.arc(mmX + df.position.x * scale, mmY + df.position.y * scale, isMobile ? 2.5 : 3.5, 0, Math.PI * 2);
       ctx.fill();
     });
+    ctx.shadowBlur = 0;
 
-    // Remote players
+    // Remote player dots
     this.remotePlayers.forEach((player) => {
       if (!player.alive || !player.segments[0]) return;
-      const dotSize = Math.min(2 + player.length * 0.02, 5);
+      const dotR = Math.min(2 + player.length * 0.015, isMobile ? 4 : 5);
       ctx.fillStyle = player.color;
       ctx.beginPath();
-      ctx.arc(mmX + player.segments[0].x * scale, mmY + player.segments[0].y * scale, dotSize, 0, Math.PI * 2);
+      ctx.arc(mmX + player.segments[0].x * scale, mmY + player.segments[0].y * scale, dotR, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    // Local player
+    // Local player blip (white + glow)
     if (this.localPlayer?.alive && this.localPlayer.segments[0]) {
-      const localDotSize = Math.min(3 + this.localPlayer.length * 0.02, 6);
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 5;
+      const dotR = Math.min(3 + this.localPlayer.length * 0.02, isMobile ? 5 : 7);
+      const hx = mmX + this.localPlayer.segments[0].x * scale;
+      const hy = mmY + this.localPlayer.segments[0].y * scale;
+      ctx.fillStyle = this.localPlayer.color;
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 8;
       ctx.beginPath();
-      ctx.arc(
-        mmX + this.localPlayer.segments[0].x * scale,
-        mmY + this.localPlayer.segments[0].y * scale,
-        localDotSize,
-        0,
-        Math.PI * 2
-      );
+      ctx.arc(hx, hy, dotR, 0, Math.PI * 2);
       ctx.fill();
+      // White center
+      ctx.fillStyle = '#fff';
       ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(hx, hy, dotR * 0.45, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    // Viewport rect
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.lineWidth = 1;
     ctx.strokeRect(
       mmX + this.camera.x * scale,
@@ -1165,11 +1231,50 @@ export class GameEngine {
       (this.canvas.height / this.zoom) * scale
     );
 
-    ctx.font = '9px Inter, system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.restore();
+
+    // Label
+    ctx.font = `bold ${isMobile ? 8 : 10}px Inter, system-ui`;
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('MAP', mmX + 6, mmY + 14);
+    ctx.fillText('MAP', mmX + 5, mmY + (isMobile ? 11 : 13));
+  }
+
+  private renderKillFeed(ctx: CanvasRenderingContext2D, w: number): void {
+    if (this.killFeedEntries.length === 0) return;
+    const startY = 60;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    this.killFeedEntries.forEach((entry, i) => {
+      ctx.globalAlpha = Math.min(entry.life * 3, 1) * 0.9;
+      ctx.font = 'bold 13px Inter, system-ui';
+      ctx.fillStyle = '#fff';
+      const x = w - 16;
+      const y = startY + i * 22;
+      // bg pill
+      const tw = ctx.measureText(entry.text).width;
+      ctx.save();
+      ctx.globalAlpha *= 0.6;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.roundRect(x - tw - 10, y - 2, tw + 14, 18, 4);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(entry.text, x, y);
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  private renderFPSCounter(ctx: CanvasRenderingContext2D): void {
+    // Only show in dev or when fps drops below 45
+    if (this.lastFps >= 45) return;
+    ctx.font = '10px monospace';
+    ctx.fillStyle = 'rgba(255,80,80,0.7)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${this.lastFps} fps`, 4, 4);
   }
 
   // ========================
@@ -1269,9 +1374,15 @@ export class GameEngine {
     const head = this.localPlayer.segments[0];
     if (head) {
       this.localPlayer.alive = false;
-      this.screenShake = 15;
+      this.screenShake = 20;
+      this.deathFlash = 1;
       this.spawnDeathParticles(head.x, head.y, this.localPlayer.color);
     }
+  }
+
+  public addKillFeedEntry(text: string): void {
+    this.killFeedEntries.unshift({ text, life: 1 });
+    if (this.killFeedEntries.length > 5) this.killFeedEntries.pop();
   }
 
   public destroy(): void {

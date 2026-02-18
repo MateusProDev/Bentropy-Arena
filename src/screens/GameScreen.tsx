@@ -29,6 +29,7 @@ export default function GameScreen() {
   const [abilityTimeLeft, setAbilityTimeLeft] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('Conectando à arena...');
+  const [playerRank, setPlayerRank] = useState<number | undefined>(undefined);
   const abilityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const firstStateRef = useRef(false);
 
@@ -139,11 +140,27 @@ export default function GameScreen() {
     const handleDeath = (msg: WSMessage) => {
       const payload = msg.payload as DeathPayload;
       const localP = useGameStore.getState().localPlayer;
+
+      // Kill feed for other players dying
+      if (localP && payload.playerId !== localP.id) {
+        const deadName = useGameStore.getState().players.get(payload.playerId)?.name ?? payload.playerId;
+        if (payload.killedBy) {
+          engine.addKillFeedEntry(`${payload.killedBy} ☠ ${deadName}`);
+        }
+        return;
+      }
+
       if (!localP || payload.playerId !== localP.id) return;
 
       // Trigger visual death effects
       engine.killedByName = payload.killedBy;
       engine.triggerDeath();
+
+      // Compute rank at time of death
+      const allP = Array.from(useGameStore.getState().players.values());
+      const myScore = payload.score;
+      const rank = allP.filter(p => p.score > myScore).length + 1;
+      setPlayerRank(rank);
 
       useGameStore.getState().setDeath({
         score: payload.score,
@@ -198,8 +215,14 @@ export default function GameScreen() {
         // Drop entire player body as food on the arena
         ws.dropPlayerFood(lp);
 
+        // Compute rank at time of death (offline mode)
+        const allP = Array.from(useGameStore.getState().players.values());
+        const myScore = Math.floor(lp.score);
+        const rank = allP.filter(p => p.score > myScore).length + 1;
+        setPlayerRank(rank);
+
         useGameStore.getState().setDeath({
-          score: Math.floor(lp.score),
+          score: myScore,
           length: Math.floor(lp.length),
           killedBy: engine.killedByName,
         });
@@ -469,6 +492,8 @@ export default function GameScreen() {
           score={deathInfo.score}
           length={deathInfo.length}
           killedBy={deathInfo.killedBy}
+          rank={playerRank}
+          totalPlayers={playerCount}
           onPlayAgain={handlePlayAgain}
           onBackToMenu={handleBackToMenu}
         />
