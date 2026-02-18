@@ -52,7 +52,7 @@ export class GameEngine {
 
   constructor(canvas: HTMLCanvasElement, config?: GameConfig) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d')!;
+    this.ctx = canvas.getContext('2d', { willReadFrequently: false, alpha: false })!;
     this.config = config || DEFAULT_CONFIG;
     this.setupCanvas();
     this.setupInput();
@@ -544,17 +544,31 @@ export class GameEngine {
     ctx.globalAlpha = 1;
   }
 
+  // Cache ambient glow so we don't recreate RadialGradient every tick
+  private _glowCacheHead: { x: number; y: number } | null = null;
+  private _glowCacheGrad: CanvasGradient | null = null;
+
   private renderGrid(ctx: CanvasRenderingContext2D): void {
-    // Ambient glow around player
+    // Ambient glow around player — rebuild gradient only every 10 frames or on big move
     if (this.localPlayer?.alive) {
       const head = this.localPlayer.segments[0];
       if (head) {
-        const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 800);
-        glow.addColorStop(0, 'rgba(16, 185, 129, 0.04)');
-        glow.addColorStop(0.4, 'rgba(60, 100, 180, 0.02)');
-        glow.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = glow;
-        ctx.fillRect(head.x - 800, head.y - 800, 1600, 1600);
+        const moved = !this._glowCacheHead ||
+          Math.abs(head.x - this._glowCacheHead.x) > 60 ||
+          Math.abs(head.y - this._glowCacheHead.y) > 60 ||
+          this.frameCount % 10 === 0;
+        if (moved) {
+          const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 800);
+          glow.addColorStop(0, 'rgba(16, 185, 129, 0.04)');
+          glow.addColorStop(0.4, 'rgba(60, 100, 180, 0.02)');
+          glow.addColorStop(1, 'rgba(0,0,0,0)');
+          this._glowCacheGrad = glow;
+          this._glowCacheHead = { x: head.x, y: head.y };
+        }
+        if (this._glowCacheGrad) {
+          ctx.fillStyle = this._glowCacheGrad;
+          ctx.fillRect(head.x - 820, head.y - 820, 1640, 1640);
+        }
       }
     }
 
@@ -663,7 +677,7 @@ export class GameEngine {
         fruit.position.y < camY - dfMargin || fruit.position.y > camY + h + dfMargin
       ) return;
 
-      const time = Date.now() * 0.003;
+      const time = this.frameCount * 0.05;
       const pulse = 1 + Math.sin(time + fruit.position.x * 0.01) * 0.2;
       const size = fruit.size * pulse;
       const float = Math.sin(time * 1.5 + fruit.position.y * 0.01) * 4;
@@ -785,8 +799,7 @@ export class GameEngine {
     if (ability === 'invisibility') {
       ctx.globalAlpha = isLocal ? 0.25 : 0.08;
     } else if (ability === 'phasing') {
-      const phaseCycle = (Date.now() % 600) / 600;
-      ctx.globalAlpha = 0.4 + Math.sin(phaseCycle * Math.PI * 2) * 0.3;
+      ctx.globalAlpha = 0.4 + Math.sin((this.frameCount % 36) / 36 * Math.PI * 2) * 0.3;
     }
 
     // Viewport culling bounds
@@ -863,8 +876,9 @@ export class GameEngine {
     const headSize = baseSize * 1.2;
 
     // Head glow
+    // shadowBlur is GPU-expensive — only apply for local player / boosting / ability
     ctx.shadowColor = abilityGlow || color;
-    ctx.shadowBlur = isLocal || player.boosting || abilityGlow ? 18 : 8;
+    ctx.shadowBlur = (isLocal || player.boosting || abilityGlow) ? 16 : 0;
 
     // Head circle with gradient
     const headGrad = ctx.createRadialGradient(
@@ -919,8 +933,8 @@ export class GameEngine {
       ctx.fill();
     });
 
-    // Tongue (flickers)
-    if (Math.sin(Date.now() * 0.008) > 0.3) {
+    // Tongue (flickers — frameCount based, no Date.now() per frame)
+    if (Math.sin(this.frameCount * 0.13) > 0.3) {
       const tongueLen = headSize * 1.2;
       const tx = head.x + dir.x * headSize;
       const ty = head.y + dir.y * headSize;
@@ -1000,53 +1014,46 @@ export class GameEngine {
   ): void {
     if (segs.length < 2) return;
 
-    // Draw the body as connected thick line segments with varying width
-    // We batch segments of similar width together for fewer draw calls
-    let pathStarted = false;
+    // Group consecutive segs into runs of similar lineWidth (tolerance ±1px)
+    // and draw each run as ONE continuous path → minimises ctx.stroke() calls.
+    const TOLERANCE = 1;
+    let runStart = 0;
 
-    for (let i = 0; i < segs.length - 1; i++) {
-      const s0 = segs[i];
-      const s1 = segs[i + 1];
-
-      // Skip break markers
-      if (s0.r < 0 || s1.r < 0) {
-        if (pathStarted) {
-          ctx.stroke();
-          pathStarted = false;
+    const flushRun = (end: number) => {
+      if (end <= runStart) return;
+      const midR = (segs[runStart].r + segs[end].r) * 0.5 * widthScale;
+      ctx.lineWidth = Math.max(1, midR * 2);
+      ctx.beginPath();
+      ctx.moveTo(segs[runStart].x, segs[runStart].y);
+      for (let i = runStart + 1; i <= end; i++) {
+        const s = segs[i];
+        if (s.r < 0) { ctx.stroke(); runStart = i + 1; return; }
+        // Smooth quadratic through midpoints
+        if (i < end && segs[i + 1].r >= 0) {
+          const mx = (s.x + segs[i + 1].x) * 0.5;
+          const my = (s.y + segs[i + 1].y) * 0.5;
+          ctx.quadraticCurveTo(s.x, s.y, mx, my);
+        } else {
+          ctx.lineTo(s.x, s.y);
         }
+      }
+      ctx.stroke();
+    };
+
+    for (let i = 1; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.r < 0) {
+        flushRun(i - 1);
+        runStart = i + 1;
         continue;
       }
-
-      // Average radius for this segment pair
-      const avgR = (s0.r + s1.r) * 0.5 * widthScale;
-      ctx.lineWidth = avgR * 2;
-
-      ctx.beginPath();
-
-      if (i === 0 || (i > 0 && segs[i - 1].r < 0)) {
-        // Start of a new sub-path
-        ctx.moveTo(s0.x, s0.y);
-      } else {
-        ctx.moveTo(s0.x, s0.y);
+      const prevR = segs[i - 1].r < 0 ? s.r : segs[i - 1].r;
+      if (Math.abs((s.r - prevR) * widthScale * 2) > TOLERANCE) {
+        flushRun(i - 1);
+        runStart = i - 1;
       }
-
-      // Use midpoint for smooth curve if we have a next-next segment
-      if (i < segs.length - 2 && segs[i + 2].r >= 0) {
-        const s2 = segs[i + 2];
-        const midX = (s1.x + s2.x) * 0.5;
-        const midY = (s1.y + s2.y) * 0.5;
-        ctx.quadraticCurveTo(s1.x, s1.y, midX, midY);
-      } else {
-        ctx.lineTo(s1.x, s1.y);
-      }
-
-      ctx.stroke();
-      pathStarted = false;
     }
-
-    if (pathStarted) {
-      ctx.stroke();
-    }
+    flushRun(segs.length - 1);
   }
 
   private renderPlayerName(ctx: CanvasRenderingContext2D, player: Player): void {

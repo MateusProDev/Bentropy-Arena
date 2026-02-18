@@ -1,9 +1,51 @@
 // ============================================================
-// Bentropy Arena - Game Room (Server-side game loop)
-// Handles all players, bots, food, collisions, and state broadcasting
+// Bentropy Arena - Game Room v3 (Server)
+// Spatial hashing, state-machine bot AI, O(1) collisions
 // ============================================================
 
 import { WebSocket } from 'ws';
+
+// ========================
+// Spatial Hash Grid
+// ========================
+class SpatialHash {
+  private cells: Map<number, string[]> = new Map();
+  private cellSize: number;
+
+  constructor(cellSize: number) {
+    this.cellSize = cellSize;
+  }
+
+  private key(cx: number, cy: number): number {
+    return ((cx & 0xffff) << 16) | (cy & 0xffff);
+  }
+
+  clear(): void { this.cells.clear(); }
+
+  insert(x: number, y: number, id: string): void {
+    const cx = Math.floor(x / this.cellSize);
+    const cy = Math.floor(y / this.cellSize);
+    const k = this.key(cx, cy);
+    let cell = this.cells.get(k);
+    if (!cell) { cell = []; this.cells.set(k, cell); }
+    cell.push(id);
+  }
+
+  query(x: number, y: number, radius: number): string[] {
+    const result: string[] = [];
+    const minCx = Math.floor((x - radius) / this.cellSize);
+    const maxCx = Math.floor((x + radius) / this.cellSize);
+    const minCy = Math.floor((y - radius) / this.cellSize);
+    const maxCy = Math.floor((y + radius) / this.cellSize);
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const cell = this.cells.get(this.key(cx, cy));
+        if (cell) for (const id of cell) result.push(id);
+      }
+    }
+    return result;
+  }
+}
 
 // ========================
 // Types (matching client types)
@@ -50,6 +92,20 @@ interface GameConfig {
   foodSize: number;
 }
 
+// Bot behaviour states
+type BotState = 'explore' | 'hunt' | 'flee' | 'ambush';
+
+interface BotMemory {
+  state: BotState;
+  stateTimer: number;        // ticks until re-evaluate
+  targetFoodIdx: number;     // index into foods array
+  targetPlayerId: string;    // player to ambush/chase
+  exploreAngle: number;      // wander direction
+  exploreTurns: number;      // how long to hold that angle
+  personalityAggression: number; // 0-1 (flee vs hunt preference)
+  personalitySpeed: number;      // base speed modifier 0.8-1.2
+}
+
 interface ServerPlayer {
   player: Player;
   ws: WebSocket | null; // null for bots
@@ -57,6 +113,7 @@ interface ServerPlayer {
   inputBoosting: boolean;
   isBot: boolean;
   lastInputTime: number;
+  botMemory?: BotMemory;
 }
 
 // ========================
@@ -107,7 +164,11 @@ export class GameRoom {
   private tick = 0;
   private loopInterval: ReturnType<typeof setInterval> | null = null;
   private botIdCounter = 0;
-  private readonly minBots = 10;
+  private readonly minBots = 14;
+  // Spatial hash: cell size = 2x segment collision radius for efficiency
+  private spatialHash = new SpatialHash(160);
+  // Pre-built per-tick head position index for fast O(1) lookup
+  private readonly botRespawnQueue: Array<{ at: number }> = [];
 
   constructor(config?: Partial<GameConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -305,15 +366,30 @@ export class GameRoom {
 
   private update(): void {
     this.tick++;
+    const now = Date.now();
     const deadPlayers: Set<string> = new Set();
 
-    // === Phase 1: Move all players ===
+    // ══ Phase 0: Rebuild spatial hash from all body segments ══
+    this.spatialHash.clear();
+    this.players.forEach((sp) => {
+      if (!sp.player.alive) return;
+      const limit = Math.min(sp.player.segments.length, 80);
+      for (let i = 1; i < limit; i++) {
+        const s = sp.player.segments[i];
+        this.spatialHash.insert(s.x, s.y, sp.player.id);
+      }
+    });
+
+    // ══ Phase 1: Move all players ══
     this.players.forEach((sp, id) => {
       if (!sp.player.alive) return;
 
       if (sp.isBot) {
-        // ---- BOT: full server-side physics ----
+        // ── BOT: server-side physics with personality speed ───
         this.updateBotAI(sp);
+
+        const mem = sp.botMemory;
+        const speedMod = mem ? mem.personalitySpeed : 1.0;
 
         const lerp = 0.18;
         const dir = sp.player.direction;
@@ -324,53 +400,47 @@ export class GameRoom {
         if (nd > 0) { dir.x /= nd; dir.y /= nd; }
 
         sp.player.boosting = sp.inputBoosting;
-        const speed = sp.player.boosting ? this.config.boostSpeed : this.config.baseSpeed;
-        if (sp.player.boosting && sp.player.length > 5) {
+        const baseSpd = sp.player.boosting ? this.config.boostSpeed : this.config.baseSpeed;
+        const speed = baseSpd * speedMod;
+        if (sp.player.boosting && sp.player.length > 8) {
           sp.player.length -= this.config.boostCost * 0.02;
         }
 
         const head = sp.player.segments[0];
-        const newHead = {
-          x: head.x + dir.x * speed,
-          y: head.y + dir.y * speed,
-        };
+        let nx = head.x + dir.x * speed;
+        let ny = head.y + dir.y * speed;
 
-        sp.player.segments.unshift(newHead);
+        // ── Soft wall bounce: flip direction, don't kill ──────
+        const wallMin = 15, wallMax = this.config.worldSize - 15;
+        if (nx < wallMin) { nx = wallMin; dir.x = Math.abs(dir.x); }
+        if (nx > wallMax) { nx = wallMax; dir.x = -Math.abs(dir.x); }
+        if (ny < wallMin) { ny = wallMin; dir.y = Math.abs(dir.y); }
+        if (ny > wallMax) { ny = wallMax; dir.y = -Math.abs(dir.y); }
+
+        sp.player.segments.unshift({ x: nx, y: ny });
         while (sp.player.segments.length > Math.ceil(sp.player.length)) {
           sp.player.segments.pop();
         }
 
-        // Wall collision
-        if (
-          newHead.x <= 10 || newHead.x >= this.config.worldSize - 10 ||
-          newHead.y <= 10 || newHead.y >= this.config.worldSize - 10
-        ) {
-          this.killPlayer(sp, null, deadPlayers);
-          deadPlayers.add(id);
-          return;
-        }
-
-        // Bot food collision (server-authoritative)
+        // Bot food collision
+        const botEatRSq = (this.config.segmentSize + this.config.foodSize) ** 2;
         for (let i = this.foods.length - 1; i >= 0; i--) {
           const food = this.foods[i];
-          const dx = newHead.x - food.position.x;
-          const dy = newHead.y - food.position.y;
-          if (Math.sqrt(dx * dx + dy * dy) < this.config.segmentSize + this.config.foodSize) {
+          const dx = nx - food.position.x;
+          const dy = ny - food.position.y;
+          if (dx * dx + dy * dy < botEatRSq) {
             sp.player.score += food.value;
             sp.player.length += this.config.growthRate;
             this.foods[i] = this.createFood();
             break;
           }
         }
+
       } else {
-        // ---- HUMAN: client-authoritative movement ----
-        // segments[0] is kept up-to-date by handleMove (client reports position).
-        // Server just grows the segment trail behind the reported head so other
-        // players can see the full snake body.
+        // ── HUMAN: client-authoritative movement ─────────────
         const head = sp.player.segments[0];
         if (!head) return;
 
-        // Smooth direction from client input
         const dir = sp.player.direction;
         const target = sp.inputDirection;
         dir.x += (target.x - dir.x) * 0.25;
@@ -380,8 +450,6 @@ export class GameRoom {
 
         sp.player.boosting = sp.inputBoosting;
 
-        // Extend trail from current head (server doesn't move head — client does)
-        // Only add new trail point if head moved meaningfully
         const prev = sp.player.segments[1];
         if (!prev || Math.hypot(head.x - prev.x, head.y - prev.y) > this.config.segmentSize * 0.5) {
           sp.player.segments.splice(1, 0, { x: head.x, y: head.y });
@@ -390,7 +458,7 @@ export class GameRoom {
           sp.player.segments.pop();
         }
 
-        // Wall boundary check using client-reported head
+        // Wall boundary check for humans
         if (
           head.x <= 10 || head.x >= this.config.worldSize - 10 ||
           head.y <= 10 || head.y >= this.config.worldSize - 10
@@ -401,89 +469,101 @@ export class GameRoom {
         }
       }
 
-      sp.player.lastUpdate = Date.now();
+      sp.player.lastUpdate = now;
     });
 
-    // === Phase 2: Check player-player collisions ===
+    // ══ Phase 2: Collision via spatial hash (O(1) per player) ══
     this.players.forEach((sp, id) => {
       if (!sp.player.alive || deadPlayers.has(id)) return;
       const head = sp.player.segments[0];
       if (!head) return;
 
-      this.players.forEach((other, otherId) => {
-        if (otherId === id || !other.player.alive || deadPlayers.has(otherId)) return;
+      const thick = 1 + Math.log2(1 + Math.max(0, sp.player.length - 10) / 12) * 0.9;
+      const myRadius = this.config.segmentSize * thick;
 
-        // Head-to-head collision
-        const otherHead = other.player.segments[0];
-        if (otherHead) {
-          const dx = head.x - otherHead.x;
-          const dy = head.y - otherHead.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < this.config.segmentSize * 1.8) {
-            // Smaller dies, equal both die
-            if (sp.player.length <= other.player.length) {
-              this.killPlayer(sp, other.player.name, deadPlayers);
-              deadPlayers.add(id);
-            }
-            if (other.player.length <= sp.player.length) {
-              this.killPlayer(other, sp.player.name, deadPlayers);
-              deadPlayers.add(otherId);
-            }
-            return;
-          }
-        }
+      // Query only nearby cells — O(1) average
+      const queryR = myRadius * 4;
+      const nearbyIds = this.spatialHash.query(head.x, head.y, queryR);
+      const checked = new Set<string>();
 
-        // Head vs body
+      for (const tid of nearbyIds) {
+        if (tid === id || checked.has(tid) || deadPlayers.has(tid)) continue;
+        checked.add(tid);
+
+        const other = this.players.get(tid);
+        if (!other || !other.player.alive) continue;
+
+        const oThick = 1 + Math.log2(1 + Math.max(0, other.player.length - 10) / 12) * 0.9;
+        const oRadius = this.config.segmentSize * oThick;
+        const collDistSq = (myRadius * 0.5 + oRadius * 0.8) ** 2;
+
+        // Check specific segments near head
         for (let i = 1; i < other.player.segments.length; i++) {
           const seg = other.player.segments[i];
           const dx = head.x - seg.x;
           const dy = head.y - seg.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < this.config.segmentSize * 1.5) {
+          if (dx * dx + dy * dy < collDistSq) {
             this.killPlayer(sp, other.player.name, deadPlayers);
             deadPlayers.add(id);
-            // Reward the killer
             other.player.score += Math.floor(sp.player.score * 0.3);
-            return;
-          }
-        }
-      });
-
-      // Self-collision
-      if (!deadPlayers.has(id) && sp.player.alive && sp.player.segments.length > 30) {
-        for (let i = 20; i < sp.player.segments.length; i++) {
-          const seg = sp.player.segments[i];
-          const dx = head.x - seg.x;
-          const dy = head.y - seg.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < this.config.segmentSize * 0.8) {
-            this.killPlayer(sp, null, deadPlayers);
-            deadPlayers.add(id);
-            return;
+            break;
           }
         }
       }
+
+      // Head-to-head check (still needed, heads aren't in spatial hash)
+      if (!deadPlayers.has(id)) {
+        this.players.forEach((other, otherId) => {
+          if (otherId === id || !other.player.alive || deadPlayers.has(otherId)) return;
+          const otherHead = other.player.segments[0];
+          if (!otherHead) return;
+          const hdx = head.x - otherHead.x;
+          const hdy = head.y - otherHead.y;
+          if (hdx * hdx + hdy * hdy < (this.config.segmentSize * 1.8) ** 2) {
+            if (sp.player.length <= other.player.length) {
+              this.killPlayer(sp, other.player.name, deadPlayers);
+              deadPlayers.add(id);
+            }
+            if (!deadPlayers.has(otherId) && other.player.length <= sp.player.length) {
+              this.killPlayer(other, sp.player.name, deadPlayers);
+              deadPlayers.add(otherId);
+            }
+          }
+        });
+      }
     });
 
-    // === Phase 3: Handle deaths ===
+    // ══ Phase 3: Handle deaths ══
     deadPlayers.forEach((id) => {
       const sp = this.players.get(id);
       if (sp) {
         this.dropFood(sp.player);
         if (sp.isBot) {
+          // Put bot in respawn queue instead of deleting immediately
+          this.botRespawnQueue.push({ at: now + 2000 + Math.random() * 3000 });
           this.players.delete(id);
         }
       }
     });
 
-    // === Phase 4: Maintain bots ===
-    if (this.tick % 30 === 0) {
+    // ══ Phase 4: Process bot respawn queue ══
+    for (let qi = this.botRespawnQueue.length - 1; qi >= 0; qi--) {
+      if (now >= this.botRespawnQueue[qi].at) {
+        this.botRespawnQueue.splice(qi, 1);
+        this.spawnBot();
+      }
+    }
+
+    // ══ Phase 5: Maintain bots every 60 ticks ══
+    if (this.tick % 60 === 0) {
       this.maintainBots();
     }
 
-    // === Phase 5: Maintain food count ===
-    while (this.foods.length < this.config.foodCount * 0.8) {
-      this.foods.push(this.createFood());
+    // ══ Phase 6: Refill food in batches of 50 (avoids GC spike) ══
+    const foodTarget = Math.floor(this.config.foodCount * 0.85);
+    if (this.foods.length < foodTarget) {
+      const batch = Math.min(50, foodTarget - this.foods.length);
+      for (let i = 0; i < batch; i++) this.foods.push(this.createFood());
     }
   }
 
@@ -601,21 +681,38 @@ export class GameRoom {
     const id = `bot_${this.botIdCounter++}`;
     const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
     const color = SNAKE_COLORS[Math.floor(Math.random() * SNAKE_COLORS.length)];
-    const player = this.createPlayer(id, name, color, null);
-    // Give bots random starting size
-    const extraLength = Math.floor(Math.random() * 20);
-    player.length += extraLength;
-    player.score = Math.floor(Math.random() * 50);
 
-    // Fill segments to match length
+    // Varied starting sizes: small / medium / large
+    const roll = Math.random();
+    let startLength = roll < 0.45 ? 10 + Math.floor(Math.random()*20)
+                    : roll < 0.80 ? 30 + Math.floor(Math.random()*40)
+                    : 70 + Math.floor(Math.random()*50);
+
+    const player = this.createPlayer(id, name, color, null);
+    player.length = startLength;
+    player.score = Math.floor(startLength * 2.5 + Math.random() * 60);
+
     const angle = Math.atan2(player.direction.y, player.direction.x);
-    for (let i = player.segments.length; i < player.length; i++) {
+    for (let i = player.segments.length; i < startLength; i++) {
       const last = player.segments[player.segments.length - 1];
       player.segments.push({
         x: last.x - Math.cos(angle) * this.config.segmentSize,
         y: last.y - Math.sin(angle) * this.config.segmentSize,
       });
     }
+
+    // Bot personality — unique per bot
+    const aggression = 0.2 + Math.random() * 0.8;
+    const mem: BotMemory = {
+      state: 'explore',
+      stateTimer: 0,
+      targetFoodIdx: -1,
+      targetPlayerId: '',
+      exploreAngle: Math.random() * Math.PI * 2,
+      exploreTurns: 30 + Math.floor(Math.random() * 60),
+      personalityAggression: aggression,
+      personalitySpeed: 0.85 + Math.random() * 0.35,
+    };
 
     const sp: ServerPlayer = {
       player,
@@ -624,108 +721,187 @@ export class GameRoom {
       inputBoosting: false,
       isBot: true,
       lastInputTime: Date.now(),
+      botMemory: mem,
     };
 
     this.players.set(id, sp);
   }
 
   private maintainBots(): void {
-    // Clean up dead bots first
-    const deadBots = Array.from(this.players.entries())
-      .filter(([, sp]) => sp.isBot && !sp.player.alive);
-    deadBots.forEach(([id]) => this.players.delete(id));
+    // Remove dead bots that weren't queued for respawn
+    this.players.forEach((sp, id) => {
+      if (sp.isBot && !sp.player.alive) this.players.delete(id);
+    });
 
-    const humanCount = this.humanCount;
     const aliveBots = Array.from(this.players.values()).filter(p => p.isBot && p.player.alive).length;
-    const totalAlive = this.totalAliveCount;
-
-    // Keep arena always populated: base 10 bots regardless of humans
-    const targetBots = this.minBots;
-    const deficit = targetBots - aliveBots;
-
-    // Spawn ALL missing bots at once (not just 1 per call)
-    for (let i = 0; i < deficit && totalAlive + i < this.config.maxPlayers; i++) {
+    const pendingRespawns = this.botRespawnQueue.length;
+    const effective = aliveBots + pendingRespawns;
+    const deficit = this.minBots - effective;
+    for (let i = 0; i < deficit && this.totalAliveCount + i < this.config.maxPlayers; i++) {
       this.spawnBot();
     }
   }
 
   private updateBotAI(sp: ServerPlayer): void {
     const head = sp.player.segments[0];
-    if (!head) return;
+    const mem = sp.botMemory;
+    if (!head || !mem) return;
 
-    // --- Find nearest food (always chase, no distance limit) ---
-    let nearestFood: Food | null = null;
-    let nearestDist = Infinity;
-    for (const food of this.foods) {
-      const dx = food.position.x - head.x;
-      const dy = food.position.y - head.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < nearestDist) {
-        nearestDist = distSq;
-        nearestFood = food;
+    mem.stateTimer--;
+    const ws = this.config.worldSize;
+
+    // ── Phase A: State transition ────────────────────────────
+    if (mem.stateTimer <= 0) {
+      // Re-evaluate state every N ticks
+      mem.stateTimer = 20 + Math.floor(Math.random() * 25);
+
+      // Check danger: is there a large snake nearby?
+      let nearestThreatDist = Infinity;
+      let nearestThreatDir: Vector2D | null = null;
+      this.players.forEach((other) => {
+        if (other === sp || !other.player.alive) return;
+        const oh = other.player.segments[0];
+        if (!oh) return;
+        const dx = oh.x - head.x;
+        const dy = oh.y - head.y;
+        const dist2 = dx*dx + dy*dy;
+        // Threat if other is bigger and close
+        if (other.player.length > sp.player.length * 0.8 && dist2 < 500*500 && dist2 < nearestThreatDist) {
+          nearestThreatDist = dist2;
+          nearestThreatDir = { x: dx, y: dy };
+        }
+      });
+
+      if (nearestThreatDist < 200*200 && mem.personalityAggression < 0.6) {
+        mem.state = 'flee';
+        mem.stateTimer = 40;
+      } else if (nearestThreatDist < 400*400 && mem.personalityAggression > 0.7 && sp.player.length > 40) {
+        // Large, aggressive bot — try to cut off prey
+        mem.state = 'ambush';
+        mem.stateTimer = 35;
+      } else if (Math.random() < 0.12) {
+        // Randomly switch to explore to break loops
+        mem.state = 'explore';
+        mem.exploreAngle = Math.atan2(sp.inputDirection.y, sp.inputDirection.x) + (Math.random()-0.5)*1.2;
+        mem.exploreTurns = 25 + Math.floor(Math.random()*50);
+        mem.stateTimer = mem.exploreTurns;
+      } else {
+        mem.state = 'hunt';
+        mem.stateTimer = 30;
+      }
+
+      // Rare: stash away threat direction for flee state
+      if (nearestThreatDir) {
+        const nd = Math.sqrt(nearestThreatDir.x**2 + nearestThreatDir.y**2);
+        if (nd > 0) { nearestThreatDir.x /= nd; nearestThreatDir.y /= nd; }
+        if (mem.state === 'flee') {
+          // Run AWAY from threat
+          sp.inputDirection.x = -nearestThreatDir.x;
+          sp.inputDirection.y = -nearestThreatDir.y;
+        }
       }
     }
 
-    // --- Avoid other snakes (danger zone: 120px) ---
-    let avoidX = 0;
-    let avoidY = 0;
-    this.players.forEach((other) => {
-      if (other === sp || !other.player.alive) return;
-      const checkSegs = Math.min(other.player.segments.length, 15);
-      for (let i = 0; i < checkSegs; i++) {
+    // ── Phase B: Execute current state ──────────────────────
+    const wallMargin = 350;
+    const wallStr = 0.3;
+
+    if (mem.state === 'explore') {
+      // Walk in explore angle, soft turns
+      sp.inputDirection.x += (Math.cos(mem.exploreAngle) - sp.inputDirection.x) * 0.05;
+      sp.inputDirection.y += (Math.sin(mem.exploreAngle) - sp.inputDirection.y) * 0.05;
+      // Drift explore angle slightly each tick
+      mem.exploreAngle += (Math.random() - 0.5) * 0.04;
+
+    } else if (mem.state === 'hunt' || mem.state === 'ambush') {
+      // Find nearest food with a smarter scan (check only 200 foods, not all)
+      let bestFood: Food | null = null;
+      let bestDist = Infinity;
+      const step = Math.max(1, Math.floor(this.foods.length / 200));
+      for (let i = 0; i < this.foods.length; i += step) {
+        const f = this.foods[i];
+        const dx = f.position.x - head.x;
+        const dy = f.position.y - head.y;
+        const d = dx*dx + dy*dy;
+        if (d < bestDist) { bestDist = d; bestFood = f; }
+      }
+
+      if (bestFood) {
+        const dx = bestFood.position.x - head.x;
+        const dy = bestFood.position.y - head.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist > 0) {
+          const steer = dist < 200 ? 0.22 : 0.07;
+          sp.inputDirection.x += (dx/dist - sp.inputDirection.x) * steer;
+          sp.inputDirection.y += (dy/dist - sp.inputDirection.y) * steer;
+        }
+      }
+
+      if (mem.state === 'ambush') {
+        // Add lateral oscillation to create coiling trap
+        const perp = { x: -sp.inputDirection.y, y: sp.inputDirection.x };
+        const osc = Math.sin(this.tick * 0.15) * 0.18;
+        sp.inputDirection.x += perp.x * osc;
+        sp.inputDirection.y += perp.y * osc;
+      }
+
+    } else if (mem.state === 'flee') {
+      // Already set direction in transition — just maintain it with slight variation
+      sp.inputDirection.x += (Math.random()-0.5) * 0.06;
+      sp.inputDirection.y += (Math.random()-0.5) * 0.06;
+      sp.inputBoosting = true; // Flee at speed!
+    }
+
+    // ── Phase C: Safety steering (always applied) ───────────
+    // Avoid snake bodies near head (use spatial hash)
+    const dangerR = 130 + sp.player.length * 0.4;
+    let avoidX = 0, avoidY = 0;
+    const nearbyCandidates = this.spatialHash.query(head.x, head.y, dangerR);
+    const seenIds = new Set<string>();
+    for (const cid of nearbyCandidates) {
+      if (cid === sp.player.id || seenIds.has(cid)) continue;
+      seenIds.add(cid);
+      const other = this.players.get(cid);
+      if (!other || !other.player.alive) continue;
+      // Check only a few body segs close to head
+      const segsCheck = Math.min(other.player.segments.length, 12);
+      for (let i = 0; i < segsCheck; i++) {
         const seg = other.player.segments[i];
         const dx = head.x - seg.x;
         const dy = head.y - seg.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 120 && dist > 0) {
-          const strength = (120 - dist) / 120;
-          avoidX += (dx / dist) * strength * 0.3;
-          avoidY += (dy / dist) * strength * 0.3;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < dangerR && dist > 0) {
+          const str = Math.pow((dangerR - dist) / dangerR, 1.5) * 0.35;
+          avoidX += (dx/dist) * str;
+          avoidY += (dy/dist) * str;
         }
       }
-    });
-
-    // --- Steer toward food ---
-    if (nearestFood) {
-      const dx = nearestFood.position.x - head.x;
-      const dy = nearestFood.position.y - head.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > 0) {
-        // Stronger lerp when food is nearby
-        const lerpStrength = dist < 300 ? 0.25 : 0.08;
-        sp.inputDirection.x += (dx / dist - sp.inputDirection.x) * lerpStrength;
-        sp.inputDirection.y += (dy / dist - sp.inputDirection.y) * lerpStrength;
-      }
     }
-
-    // Small random wandering to prevent perfect alignment
-    if (Math.random() < 0.008) {
-      const angle = Math.random() * Math.PI * 2;
-      sp.inputDirection.x += Math.cos(angle) * 0.15;
-      sp.inputDirection.y += Math.sin(angle) * 0.15;
-    }
-
-    // --- Apply avoidance ---
     sp.inputDirection.x += avoidX;
     sp.inputDirection.y += avoidY;
 
-    // --- Wall avoidance (start turning at 300px from edge) ---
-    const margin = 300;
-    const wallStr = 0.25;
-    if (head.x < margin) sp.inputDirection.x += wallStr * (1 - head.x / margin);
-    if (head.x > this.config.worldSize - margin) sp.inputDirection.x -= wallStr * (1 - (this.config.worldSize - head.x) / margin);
-    if (head.y < margin) sp.inputDirection.y += wallStr * (1 - head.y / margin);
-    if (head.y > this.config.worldSize - margin) sp.inputDirection.y -= wallStr * (1 - (this.config.worldSize - head.y) / margin);
+    // Wall avoidance — strong push away from edges
+    if (head.x < wallMargin) sp.inputDirection.x += wallStr * Math.pow(1 - head.x/wallMargin, 2);
+    if (head.x > ws-wallMargin) sp.inputDirection.x -= wallStr * Math.pow(1 - (ws-head.x)/wallMargin, 2);
+    if (head.y < wallMargin) sp.inputDirection.y += wallStr * Math.pow(1 - head.y/wallMargin, 2);
+    if (head.y > ws-wallMargin) sp.inputDirection.y -= wallStr * Math.pow(1 - (ws-head.y)/wallMargin, 2);
 
-    // --- Normalize ---
-    const dl = Math.sqrt(sp.inputDirection.x ** 2 + sp.inputDirection.y ** 2);
-    if (dl > 0) {
-      sp.inputDirection.x /= dl;
-      sp.inputDirection.y /= dl;
+    // Normalize
+    const dl = Math.sqrt(sp.inputDirection.x**2 + sp.inputDirection.y**2);
+    if (dl > 0) { sp.inputDirection.x /= dl; sp.inputDirection.y /= dl; }
+
+    // Boosting logic: only boost when in flee state or chasing very close food
+    if (mem.state !== 'flee') {
+      let closestFoodSq = Infinity;
+      for (let i = 0; i < Math.min(this.foods.length, 100); i++) {
+        const f = this.foods[i];
+        const dx = f.position.x - head.x;
+        const dy = f.position.y - head.y;
+        const d = dx*dx + dy*dy;
+        if (d < closestFoodSq) closestFoodSq = d;
+      }
+      sp.inputBoosting = closestFoodSq < 120*120 && sp.player.length > 20 && Math.random() < 0.04;
     }
-
-    // Random boost when near food
-    sp.inputBoosting = nearestDist < 150 * 150 && Math.random() < 0.03;
   }
 
   // ========================

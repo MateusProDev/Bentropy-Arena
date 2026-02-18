@@ -1,13 +1,51 @@
 // ============================================================
-// Bentropy Arena - WebSocket Client
-// Handles real-time multiplayer communication
-// Falls back to local AI bots when WS server is unavailable
+// Bentropy Arena - WebSocket Client v3
+// Fallback AI: state-machine bots, spatial hash, 15fps broadcast
 // ============================================================
 
 import type { WSMessage, JoinPayload, Player, Food, DevilFruit, Vector2D } from '../types/game';
 import { DEFAULT_CONFIG, SNAKE_COLORS, DEVIL_FRUITS } from '../types/game';
 
 type MessageHandler = (msg: WSMessage) => void;
+
+// ── Spatial Hash (client-side, lightweight) ──────────────────
+class SpatialHash {
+  private cells = new Map<number, string[]>();
+  private cs: number;
+  constructor(cs: number) { this.cs = cs; }
+  private k(cx: number, cy: number) { return ((cx & 0xffff) << 16) | (cy & 0xffff); }
+  clear() { this.cells.clear(); }
+  insert(x: number, y: number, id: string) {
+    const cx = Math.floor(x / this.cs), cy = Math.floor(y / this.cs);
+    const k = this.k(cx, cy);
+    let c = this.cells.get(k);
+    if (!c) { c = []; this.cells.set(k, c); }
+    c.push(id);
+  }
+  query(x: number, y: number, r: number): string[] {
+    const out: string[] = [];
+    const minCx = Math.floor((x-r)/this.cs), maxCx = Math.floor((x+r)/this.cs);
+    const minCy = Math.floor((y-r)/this.cs), maxCy = Math.floor((y+r)/this.cs);
+    for (let cx = minCx; cx <= maxCx; cx++)
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const c = this.cells.get(this.k(cx, cy));
+        if (c) for (const id of c) out.push(id);
+      }
+    return out;
+  }
+}
+
+// ── Bot state machine memory ──────────────────────────────────
+type BotState = 'explore' | 'hunt' | 'flee' | 'ambush';
+interface BotMemory {
+  state: BotState;
+  stateTimer: number;
+  exploreAngle: number;
+  exploreDrift: number;
+  aggression: number;   // 0–1
+  speedMod: number;     // 0.82–1.18
+  tick: number;
+}
 
 export class WSClient {
   private ws: WebSocket | null = null;
@@ -129,7 +167,7 @@ export class WSClient {
     console.log('[WS] Starting local fallback mode with AI bots');
 
     // Generate bots
-    this.generateBots(10);
+    this.generateBots(this.TARGET_BOTS);
     this.generateFoods(DEFAULT_CONFIG.foodCount);
     this.generateDevilFruits(10);
 
@@ -140,58 +178,80 @@ export class WSClient {
     }, 1000 / 60);
   }
 
+  // ── Bot memory map ────────────────────────────────────────
+  private botMem = new Map<string, BotMemory>();
+  private spatialHash = new SpatialHash(180);
+  private botRespawnQueue: Array<{ at: number; idx: number }> = [];
+  private botNameCounter = 0;
+  private readonly TARGET_BOTS = 15;
+  private readonly BOT_NAMES = [
+    'Cobra_AI', 'Python_Bot', 'Serpente_X', 'Viper_Pro',
+    'Mamba_Zero', 'Anaconda_3', 'King_Snake', 'Naga_Elite',
+    'SlitherKing', 'VenomByte', 'CoilMaster', 'FangStrike',
+    'ToxicFang', 'ShadowCoil', 'IronScale', 'NightViper',
+    'BlazeTail', 'StormFang', 'CyberCobra', 'GhostNaga',
+  ];
+
   private generateBots(count: number): void {
-    const botNames = [
-      'Cobra_AI', 'Python_Bot', 'Serpente_X', 'Viper_Pro',
-      'Mamba_Zero', 'Anaconda_3', 'King_Snake', 'Naga_Elite',
-      'SlitherKing', 'VenomByte', 'CoilMaster', 'FangStrike',
-      'ToxicFang', 'ShadowCoil', 'IronScale', 'NightViper',
-      'BlazeTail', 'StormFang', 'CyberCobra', 'GhostNaga',
-    ];
-
-    const existingCount = this.bots.size;
-
     for (let i = 0; i < count; i++) {
-      const idx = existingCount + i;
-      const color = SNAKE_COLORS[idx % SNAKE_COLORS.length];
-      const startX = Math.random() * (DEFAULT_CONFIG.worldSize - 1000) + 500;
-      const startY = Math.random() * (DEFAULT_CONFIG.worldSize - 1000) + 500;
-      const angle = Math.random() * Math.PI * 2;
-
-      // Varied sizes: some small (15), some medium (30-60), a few big (80-120)
-      const sizeRoll = Math.random();
-      let baseLength: number;
-      if (sizeRoll < 0.4) baseLength = Math.floor(Math.random() * 15) + 15;
-      else if (sizeRoll < 0.8) baseLength = Math.floor(Math.random() * 30) + 30;
-      else baseLength = Math.floor(Math.random() * 40) + 80;
-
-      const segments: Vector2D[] = [];
-      for (let j = 0; j < baseLength; j++) {
-        segments.push({
-          x: startX - Math.cos(angle) * j * 10,
-          y: startY - Math.sin(angle) * j * 10,
-        });
-      }
-
-      const bot: Player = {
-        id: `bot_${Date.now()}_${idx}`,
-        name: botNames[idx % botNames.length],
-        photoURL: null,
-        color,
-        segments,
-        direction: { x: Math.cos(angle), y: Math.sin(angle) },
-        speed: DEFAULT_CONFIG.baseSpeed,
-        score: Math.floor(baseLength * 3 + Math.random() * 50),
-        length: baseLength,
-        alive: true,
-        boosting: false,
-        lastUpdate: Date.now(),
-        activeAbility: null,
-        abilityEndTime: 0,
-      };
-
-      this.bots.set(bot.id, bot);
+      this.spawnOneBot();
     }
+  }
+
+  private spawnOneBot(): void {
+    const idx = this.botNameCounter++ % this.BOT_NAMES.length;
+    const color = SNAKE_COLORS[idx % SNAKE_COLORS.length];
+    const margin = 800;
+    const ws = DEFAULT_CONFIG.worldSize;
+    const startX = margin + Math.random() * (ws - margin * 2);
+    const startY = margin + Math.random() * (ws - margin * 2);
+    const angle = Math.random() * Math.PI * 2;
+
+    // Varied sizes
+    const sizeRoll = Math.random();
+    let baseLength: number;
+    if (sizeRoll < 0.4)      baseLength = Math.floor(Math.random() * 16) + 15;
+    else if (sizeRoll < 0.8) baseLength = Math.floor(Math.random() * 30) + 32;
+    else                     baseLength = Math.floor(Math.random() * 40) + 80;
+
+    const segments: Vector2D[] = [];
+    for (let j = 0; j < baseLength; j++) {
+      segments.push({
+        x: startX - Math.cos(angle) * j * 10,
+        y: startY - Math.sin(angle) * j * 10,
+      });
+    }
+
+    const botId = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const bot: Player = {
+      id: botId,
+      name: this.BOT_NAMES[idx],
+      photoURL: null,
+      color,
+      segments,
+      direction: { x: Math.cos(angle), y: Math.sin(angle) },
+      speed: DEFAULT_CONFIG.baseSpeed,
+      score: Math.floor(baseLength * 3 + Math.random() * 50),
+      length: baseLength,
+      alive: true,
+      boosting: false,
+      lastUpdate: Date.now(),
+      activeAbility: null,
+      abilityEndTime: 0,
+    };
+
+    this.bots.set(botId, bot);
+
+    // Initialise memory
+    this.botMem.set(botId, {
+      state: 'explore',
+      stateTimer: 0,
+      exploreAngle: angle,
+      exploreDrift: (Math.random() - 0.5) * 0.04,
+      aggression: 0.2 + Math.random() * 0.8,
+      speedMod: 0.82 + Math.random() * 0.36,
+      tick: 0,
+    });
   }
 
   private generateDevilFruits(count: number): void {
@@ -233,246 +293,340 @@ export class WSClient {
   }
 
   private updateBots(): void {
-    const deadBots: string[] = [];
+    const now = Date.now();
+    const ws = DEFAULT_CONFIG.worldSize;
+
+    // ── Phase 0: Rebuild spatial hash ────────────────────────
+    this.spatialHash.clear();
+    this.bots.forEach((b) => {
+      if (!b.alive) return;
+      const limit = Math.min(b.segments.length, 80);
+      for (let i = 1; i < limit; i++) {
+        const s = b.segments[i];
+        this.spatialHash.insert(s.x, s.y, b.id);
+      }
+    });
+    // Also hash local player body
+    if (this.localPlayerRef?.alive) {
+      const limit = Math.min(this.localPlayerRef.segments.length, 80);
+      for (let i = 1; i < limit; i++) {
+        const s = this.localPlayerRef.segments[i];
+        this.spatialHash.insert(s.x, s.y, '__player__');
+      }
+    }
+
+    const deadIds: string[] = [];
 
     this.bots.forEach((bot) => {
       if (!bot.alive) return;
+      const mem = this.botMem.get(bot.id);
+      if (!mem) return;
 
+      mem.tick++;
       const head = bot.segments[0];
+      const thick = 1 + Math.log2(1 + Math.max(0, bot.length - 10) / 12) * 0.9;
+      const radius = DEFAULT_CONFIG.segmentSize * thick;
 
-      // --- Find nearest food (wider range for bigger bots) ---
-      let nearestFood: Food | null = null;
-      let nearestFoodDist = Infinity;
-      const seekRange = 300 + bot.length * 3; // bigger snakes see farther
+      // ── Phase A: State evaluation (every ~30 ticks) ────────
+      if (mem.stateTimer <= 0) {
+        mem.stateTimer = 20 + Math.floor(Math.random() * 25);
 
-      for (const food of this.botFoods) {
-        const dx = food.position.x - head.x;
-        const dy = food.position.y - head.y;
-        const dist = dx * dx + dy * dy;
-        if (dist < nearestFoodDist) {
-          nearestFoodDist = dist;
-          nearestFood = food;
-        }
-      }
-
-      // --- Avoid other snakes ---
-      let avoidX = 0;
-      let avoidY = 0;
-      const avoidRadius = 60 + bot.length * 0.5;
-      this.bots.forEach((other) => {
-        if (other.id === bot.id || !other.alive) return;
-        const checkSegs = Math.min(other.segments.length, 20);
-        for (let i = 0; i < checkSegs; i++) {
-          const seg = other.segments[i];
-          const dx = head.x - seg.x;
-          const dy = head.y - seg.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < avoidRadius && dist > 0) {
-            const force = (avoidRadius - dist) / avoidRadius * 0.02;
-            avoidX += (dx / dist) * force;
-            avoidY += (dy / dist) * force;
+        // Check nearby threats via spatial hash
+        const nearbyIds = this.spatialHash.query(head.x, head.y, 250);
+        let threatSize = 0;
+        let hasThreat = false;
+        for (const tid of nearbyIds) {
+          if (tid === bot.id) continue;
+          const other = tid === '__player__'
+            ? this.localPlayerRef
+            : this.bots.get(tid);
+          if (!other || !other.alive) continue;
+          if (other.length > bot.length * 1.15) {
+            const dx = other.segments[0].x - head.x;
+            const dy = other.segments[0].y - head.y;
+            if (dx*dx + dy*dy < 220*220) { hasThreat = true; threatSize = other.length; }
           }
         }
-      });
 
-      // --- Decide direction ---
-      if (Math.random() < 0.015) {
-        // Random exploration
-        const angle = Math.random() * Math.PI * 2;
-        bot.direction = { x: Math.cos(angle), y: Math.sin(angle) };
-      } else if (nearestFood && nearestFoodDist < seekRange * seekRange) {
-        // Chase food
-        const dx = nearestFood.position.x - head.x;
-        const dy = nearestFood.position.y - head.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 0) {
-          const turnSpeed = 0.12;
-          bot.direction.x += (dx / dist - bot.direction.x) * turnSpeed;
-          bot.direction.y += (dy / dist - bot.direction.y) * turnSpeed;
-        }
-      }
-
-      // Apply avoidance
-      bot.direction.x += avoidX;
-      bot.direction.y += avoidY;
-
-      // Avoid walls (stronger push for bigger map)
-      const wallMargin = 300;
-      const wallForce = 0.08;
-      if (head.x < wallMargin) bot.direction.x += wallForce * (1 - head.x / wallMargin);
-      if (head.x > DEFAULT_CONFIG.worldSize - wallMargin) bot.direction.x -= wallForce * (1 - (DEFAULT_CONFIG.worldSize - head.x) / wallMargin);
-      if (head.y < wallMargin) bot.direction.y += wallForce * (1 - head.y / wallMargin);
-      if (head.y > DEFAULT_CONFIG.worldSize - wallMargin) bot.direction.y -= wallForce * (1 - (DEFAULT_CONFIG.worldSize - head.y) / wallMargin);
-
-      // Normalize direction
-      const dl = Math.sqrt(bot.direction.x ** 2 + bot.direction.y ** 2);
-      if (dl > 0) {
-        bot.direction.x /= dl;
-        bot.direction.y /= dl;
-      }
-
-      // --- Boost logic: boost when chasing close food or when big ---
-      const shouldBoost = (nearestFood && nearestFoodDist < 150 * 150 && bot.length > 20) ||
-                          (bot.length > 60 && Math.random() < 0.03);
-      bot.boosting = !!shouldBoost;
-      if (bot.boosting && bot.length > 8) {
-        bot.length -= 0.05;
-        bot.score = Math.max(0, bot.score - 0.05);
-      }
-
-      // Move (bots are slower than players)
-      const speed = (bot.boosting ? DEFAULT_CONFIG.boostSpeed : DEFAULT_CONFIG.baseSpeed) * 0.6;
-      const newHead = {
-        x: head.x + bot.direction.x * speed,
-        y: head.y + bot.direction.y * speed,
-      };
-
-      // Clamp to world
-      newHead.x = Math.max(30, Math.min(DEFAULT_CONFIG.worldSize - 30, newHead.x));
-      newHead.y = Math.max(30, Math.min(DEFAULT_CONFIG.worldSize - 30, newHead.y));
-
-      bot.segments.unshift(newHead);
-      while (bot.segments.length > bot.length) {
-        bot.segments.pop();
-      }
-
-      // Check bot collision with other bot bodies
-      let botDied = false;
-      const botThick = 1 + Math.log2(1 + Math.max(0, bot.length - 10) / 12) * 0.9;
-      const botRadius = DEFAULT_CONFIG.segmentSize * botThick;
-
-      this.bots.forEach((other) => {
-        if (other.id === bot.id || !other.alive || botDied) return;
-        const otherThick = 1 + Math.log2(1 + Math.max(0, other.length - 10) / 12) * 0.9;
-        const otherRadius = DEFAULT_CONFIG.segmentSize * otherThick;
-        const collDist = (botRadius * 0.5 + otherRadius * 0.8);
-        const collDistSq = collDist * collDist;
-        for (let i = 1; i < other.segments.length; i++) {
-          const seg = other.segments[i];
-          const dx = newHead.x - seg.x;
-          const dy = newHead.y - seg.y;
-          if (dx * dx + dy * dy < collDistSq) {
-            botDied = true;
-            break;
-          }
-        }
-      });
-
-      // Check bot collision with LOCAL PLAYER body
-      if (!botDied && this.localPlayerRef && this.localPlayerRef.alive) {
-        // Skip if player has phasing or invisibility
-        const pAbility = this.localPlayerRef.activeAbility;
-        if (pAbility !== 'phasing' && pAbility !== 'invisibility' && pAbility !== 'freeze') {
-          const pLen = Math.max(this.localPlayerRef.length, 1);
-          const pThick = 1 + Math.log2(1 + Math.max(0, pLen - 10) / 12) * 0.9;
-          const pRadius = DEFAULT_CONFIG.segmentSize * pThick;
-          const collDist = (botRadius * 0.5 + pRadius * 0.8);
-          const collDistSq = collDist * collDist;
-          for (let i = 1; i < this.localPlayerRef.segments.length; i++) {
-            const seg = this.localPlayerRef.segments[i];
-            const dx = newHead.x - seg.x;
-            const dy = newHead.y - seg.y;
-            if (dx * dx + dy * dy < collDistSq) {
-              botDied = true;
-              break;
+        // Check for prey within range
+        let hasPrey = false;
+        if (mem.aggression > 0.55) {
+          this.bots.forEach((other) => {
+            if (hasPrey || other.id === bot.id || !other.alive) return;
+            if (other.length < bot.length * 0.75) {
+              const dx = other.segments[0].x - head.x;
+              const dy = other.segments[0].y - head.y;
+              if (dx*dx + dy*dy < 300*300) hasPrey = true;
             }
+          });
+        }
+
+        if (hasThreat) {
+          mem.state = 'flee';
+        } else if (hasPrey && mem.aggression > 0.6) {
+          mem.state = 'ambush';
+        } else if (Math.random() < 0.12) {
+          mem.state = 'explore';
+          mem.exploreAngle = Math.random() * Math.PI * 2;
+          mem.exploreDrift = (Math.random() - 0.5) * 0.05;
+        } else {
+          mem.state = 'hunt';
+        }
+
+        void threatSize; // reference to suppress lint
+      }
+      mem.stateTimer--;
+
+      // ── Phase B: Desired direction from state ───────────────
+      let desiredX = bot.direction.x;
+      let desiredY = bot.direction.y;
+
+      if (mem.state === 'explore') {
+        // Smooth drift – gently steer toward exploreAngle
+        mem.exploreAngle += mem.exploreDrift;
+        const tDx = Math.cos(mem.exploreAngle);
+        const tDy = Math.sin(mem.exploreAngle);
+        desiredX += (tDx - desiredX) * 0.06;
+        desiredY += (tDy - desiredY) * 0.06;
+
+      } else if (mem.state === 'hunt' || mem.state === 'ambush') {
+        // Find nearest food (scan with stride for perf)
+        let nearestDistSq = Infinity;
+        let fdx = 0, fdy = 0;
+        const stride = this.botFoods.length > 400 ? 3 : 1;
+        for (let fi = 0; fi < this.botFoods.length; fi += stride) {
+          const f = this.botFoods[fi];
+          const dx = f.position.x - head.x;
+          const dy = f.position.y - head.y;
+          const dsq = dx*dx + dy*dy;
+          if (dsq < nearestDistSq) { nearestDistSq = dsq; fdx = dx; fdy = dy; }
+        }
+
+        if (nearestDistSq < Infinity) {
+          const fd = Math.sqrt(nearestDistSq) || 1;
+          const lerpT = mem.state === 'ambush'
+            ? 0.13 + mem.aggression * 0.10
+            : 0.07 + mem.aggression * 0.12;
+          desiredX += (fdx / fd - desiredX) * lerpT;
+          desiredY += (fdy / fd - desiredY) * lerpT;
+        }
+
+        // Ambush: lateral oscillation
+        if (mem.state === 'ambush') {
+          const perp = Math.sin(mem.tick * 0.15) * 0.18;
+          desiredX += -desiredY * perp;
+          desiredY +=  desiredX * perp;
+        }
+
+      } else if (mem.state === 'flee') {
+        // Move away from the nearest threat
+        const nearbyIds = this.spatialHash.query(head.x, head.y, 280);
+        let awayX = 0, awayY = 0;
+        for (const tid of nearbyIds) {
+          if (tid === bot.id) continue;
+          const other = tid === '__player__'
+            ? this.localPlayerRef
+            : this.bots.get(tid);
+          if (!other || !other.alive || other.length <= bot.length) continue;
+          const oh = other.segments[0];
+          const dx = head.x - oh.x, dy = head.y - oh.y;
+          const d = Math.sqrt(dx*dx + dy*dy) || 1;
+          awayX += dx / d; awayY += dy / d;
+        }
+        if (awayX !== 0 || awayY !== 0) {
+          const al = Math.sqrt(awayX*awayX + awayY*awayY) || 1;
+          desiredX += (awayX/al - desiredX) * 0.20;
+          desiredY += (awayY/al - desiredY) * 0.20;
+        }
+        bot.boosting = true;
+      }
+
+      // ── Phase C: Safety steering (spatial hash body avoidance) ─
+      const dangerR = 110 + radius * 2;
+      const nearSegs = this.spatialHash.query(head.x, head.y, dangerR);
+      const seen = new Set<string>();
+      for (const tid of nearSegs) {
+        if (tid === bot.id || seen.has(tid)) continue;
+        seen.add(tid);
+        const segs = tid === '__player__'
+          ? this.localPlayerRef?.segments
+          : this.bots.get(tid)?.segments;
+        if (!segs) continue;
+        for (const seg of segs) {
+          const dx = head.x - seg.x, dy = head.y - seg.y;
+          const d2 = dx*dx + dy*dy;
+          if (d2 < dangerR*dangerR && d2 > 0.1) {
+            const d = Math.sqrt(d2);
+            const f = Math.pow(1 - d/dangerR, 1.5) * 0.30;
+            desiredX += (dx/d) * f;
+            desiredY += (dy/d) * f;
           }
         }
       }
 
-      // Check world boundary collision for bots
-      if (newHead.x <= 10 || newHead.x >= DEFAULT_CONFIG.worldSize - 10 ||
-          newHead.y <= 10 || newHead.y >= DEFAULT_CONFIG.worldSize - 10) {
-        botDied = true;
+      // ── Phase D: Wall avoidance (smooth quadratic falloff) ──
+      const wallM = 400;
+      if (head.x < wallM)              desiredX += Math.pow(1 - head.x/wallM, 2) * 0.25;
+      if (head.x > ws - wallM)         desiredX -= Math.pow(1 - (ws-head.x)/wallM, 2) * 0.25;
+      if (head.y < wallM)              desiredY += Math.pow(1 - head.y/wallM, 2) * 0.25;
+      if (head.y > ws - wallM)         desiredY -= Math.pow(1 - (ws-head.y)/wallM, 2) * 0.25;
+
+      // ── Apply direction with max turn rate ───────────────────
+      const maxTurn = 0.14;
+      const dx = desiredX - bot.direction.x, dy = desiredY - bot.direction.y;
+      const dl = Math.sqrt(dx*dx + dy*dy);
+      if (dl > maxTurn) {
+        bot.direction.x += (dx/dl) * maxTurn;
+        bot.direction.y += (dy/dl) * maxTurn;
+      } else {
+        bot.direction.x = desiredX;
+        bot.direction.y = desiredY;
+      }
+      const norm = Math.sqrt(bot.direction.x**2 + bot.direction.y**2) || 1;
+      bot.direction.x /= norm;
+      bot.direction.y /= norm;
+
+      // Boost only while fleeing (and has enough length)
+      if (mem.state !== 'flee') bot.boosting = false;
+      if (bot.boosting && bot.length <= 12) bot.boosting = false;
+
+      // ── Move ─────────────────────────────────────────────────
+      const speed = (bot.boosting ? DEFAULT_CONFIG.boostSpeed : DEFAULT_CONFIG.baseSpeed) * mem.speedMod;
+      const newX = Math.max(20, Math.min(ws - 20, head.x + bot.direction.x * speed));
+      const newY = Math.max(20, Math.min(ws - 20, head.y + bot.direction.y * speed));
+
+      // Soft wall bounce (flip direction instead of dying)
+      if (newX <= 20 || newX >= ws - 20) bot.direction.x *= -1;
+      if (newY <= 20 || newY >= ws - 20) bot.direction.y *= -1;
+
+      bot.segments.unshift({ x: newX, y: newY });
+      while (bot.segments.length > bot.length) bot.segments.pop();
+
+      // Boost drains length
+      if (bot.boosting && bot.length > 12) {
+        bot.length -= 0.06;
+        bot.score = Math.max(0, bot.score - 0.06);
+      }
+
+      // ── Collision: head vs nearby segment ────────────────────
+      let botDied = false;
+      const ownRadius = radius * 0.5;
+      const queryR = radius * 2.5;
+
+      for (const tid of this.spatialHash.query(newX, newY, queryR)) {
+        if (tid === bot.id || botDied) continue;
+        const segs = tid === '__player__'
+          ? this.localPlayerRef?.segments
+          : this.bots.get(tid)?.segments;
+        if (!segs) continue;
+        const pAbility = tid === '__player__' ? this.localPlayerRef?.activeAbility : null;
+        if (pAbility === 'phasing' || pAbility === 'invisibility' || pAbility === 'freeze') continue;
+
+        const otherLen = tid === '__player__'
+          ? (this.localPlayerRef?.length ?? 0)
+          : (this.bots.get(tid)?.length ?? 0);
+        const oThick = 1 + Math.log2(1 + Math.max(0, otherLen - 10) / 12) * 0.9;
+        const oRadius = DEFAULT_CONFIG.segmentSize * oThick;
+        const collDistSq = (ownRadius + oRadius * 0.8) ** 2;
+
+        for (let si = 1; si < segs.length; si++) {
+          const seg = segs[si];
+          const sdx = newX - seg.x, sdy = newY - seg.y;
+          if (sdx*sdx + sdy*sdy < collDistSq) { botDied = true; break; }
+        }
       }
 
       if (botDied) {
         bot.alive = false;
-        deadBots.push(bot.id);
-        // Drop ENTIRE body trail as food for others to eat
+        deadIds.push(bot.id);
+        // Drop body as food
         const spacing = Math.max(1, Math.floor(bot.segments.length / 80));
-        for (let i = 0; i < bot.segments.length; i += spacing) {
-          const seg = bot.segments[i];
-          if (seg) {
-            this.botFoods.push({
-              id: `food_drop_${Date.now()}_${bot.id}_${i}`,
-              position: { x: seg.x + (Math.random() - 0.5) * 10, y: seg.y + (Math.random() - 0.5) * 10 },
-              color: bot.color,
-              size: Math.random() * 3 + 5,
-              value: Math.floor(Math.random() * 2) + 2,
-            });
-          }
+        for (let si = 0; si < bot.segments.length; si += spacing) {
+          const seg = bot.segments[si];
+          this.botFoods.push({
+            id: `food_drop_${now}_${si}`,
+            position: { x: seg.x + (Math.random()-0.5)*12, y: seg.y + (Math.random()-0.5)*12 },
+            color: bot.color, size: Math.random()*3+5, value: 2,
+          });
         }
+        // Schedule respawn
+        this.botRespawnQueue.push({ at: now + 3000 + Math.random() * 4000, idx: this.botNameCounter });
         return;
       }
 
-      // Eat food
-      for (let i = this.botFoods.length - 1; i >= 0; i--) {
-        const food = this.botFoods[i];
-        const dx = newHead.x - food.position.x;
-        const dy = newHead.y - food.position.y;
-        if (dx * dx + dy * dy < 500) {
-          bot.score += food.value;
+      // ── Eat food ──────────────────────────────────────────────
+      const eatR = radius * 1.6;
+      const eatR2 = eatR * eatR;
+      for (let fi = this.botFoods.length - 1; fi >= 0; fi--) {
+        const f = this.botFoods[fi];
+        const fdx = newX - f.position.x, fdy = newY - f.position.y;
+        if (fdx*fdx + fdy*fdy < eatR2) {
+          bot.score += f.value;
           bot.length += DEFAULT_CONFIG.growthRate;
-          // Replace food
-          this.botFoods[i] = {
-            id: `food_${Date.now()}_${i}`,
-            position: {
-              x: Math.random() * (DEFAULT_CONFIG.worldSize - 200) + 100,
-              y: Math.random() * (DEFAULT_CONFIG.worldSize - 200) + 100,
-            },
-            color: food.color,
-            size: Math.random() * 4 + 4,
-            value: Math.floor(Math.random() * 3) + 1,
+          // Replace food at a new random position
+          const colors = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+          this.botFoods[fi] = {
+            id: `food_r_${now}_${fi}`,
+            position: { x: 50 + Math.random()*(ws-100), y: 50 + Math.random()*(ws-100) },
+            color: colors[Math.floor(Math.random()*colors.length)],
+            size: Math.random()*4+4, value: Math.floor(Math.random()*3)+1,
           };
           break;
         }
       }
 
-      // Bot eats devil fruits
-      for (let i = this.botDevilFruits.length - 1; i >= 0; i--) {
-        const fruit = this.botDevilFruits[i];
-        const fdx = newHead.x - fruit.position.x;
-        const fdy = newHead.y - fruit.position.y;
-        if (fdx * fdx + fdy * fdy < 28 * 28) {
-          // Apply ability to bot
+      // ── Eat devil fruits ──────────────────────────────────────
+      for (let fi = this.botDevilFruits.length - 1; fi >= 0; fi--) {
+        const fruit = this.botDevilFruits[fi];
+        const fdx = newX - fruit.position.x, fdy = newY - fruit.position.y;
+        if (fdx*fdx + fdy*fdy < 28*28) {
           const def = DEVIL_FRUITS.find(d => d.ability === fruit.ability);
           if (def) {
-            if (def.ability === 'growth') {
-              bot.length += 50;
-              bot.score += 50;
-            } else {
-              bot.activeAbility = def.ability;
-              bot.abilityEndTime = Date.now() + def.duration * 1000;
-            }
+            if (def.ability === 'growth') { bot.length += 50; bot.score += 50; }
+            else { bot.activeAbility = def.ability; bot.abilityEndTime = now + def.duration*1000; }
           }
-          // Remove and respawn later
-          this.botDevilFruits.splice(i, 1);
-          setTimeout(() => this.spawnOneDevilFruit(), 15000 + Math.random() * 15000);
+          this.botDevilFruits.splice(fi, 1);
+          setTimeout(() => this.spawnOneDevilFruit(), 15000 + Math.random()*15000);
           break;
         }
       }
 
-      // Expire bot abilities
-      if (bot.activeAbility && bot.abilityEndTime > 0 && Date.now() > bot.abilityEndTime) {
-        bot.activeAbility = null;
-        bot.abilityEndTime = 0;
+      // Expire ability
+      if (bot.activeAbility && bot.abilityEndTime > 0 && now > bot.abilityEndTime) {
+        bot.activeAbility = null; bot.abilityEndTime = 0;
       }
 
-      bot.lastUpdate = Date.now();
+      bot.lastUpdate = now;
     });
 
-    // Respawn dead bots after a short delay
-    deadBots.forEach((id) => {
+    // ── Process dead bots ─────────────────────────────────────
+    for (const id of deadIds) {
+      this.botMem.delete(id);
       this.bots.delete(id);
-    });
-    // Keep bot count at 15
-    const aliveBots = Array.from(this.bots.values()).filter(b => b.alive).length;
-    const botsNeeded = 10 - aliveBots;
-    if (botsNeeded > 0 && Math.random() < 0.1) {
-      this.generateBots(Math.min(botsNeeded, 2));
+    }
+
+    // ── Process respawn queue ─────────────────────────────────
+    for (let qi = this.botRespawnQueue.length - 1; qi >= 0; qi--) {
+      if (now >= this.botRespawnQueue[qi].at) {
+        this.botRespawnQueue.splice(qi, 1);
+        this.spawnOneBot();
+      }
+    }
+
+    // ── Maintain stable TARGET_BOTS pool ─────────────────────
+    const alive = Array.from(this.bots.values()).filter(b => b.alive).length;
+    const pending = this.botRespawnQueue.length;
+    const deficit = this.TARGET_BOTS - alive - pending;
+    if (deficit > 0) {
+      for (let i = 0; i < deficit; i++) {
+        this.botRespawnQueue.push({ at: now + 1000 + Math.random()*2000, idx: this.botNameCounter });
+      }
     }
   }
+
+  // ── Suppress unused-variable lint error ──────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
 
   private emitFallbackState(_localPlayerId: string): void {
     const players: Record<string, Player> = {};
