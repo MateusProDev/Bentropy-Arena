@@ -757,7 +757,9 @@ export class GameRoom {
 
       // Check danger: is there a large snake nearby?
       let nearestThreatDist = Infinity;
-      let nearestThreatDir: Vector2D | null = null;
+      let nearestThreatDirX = 0;
+      let nearestThreatDirY = 0;
+      let hasThreat = false;
       this.players.forEach((other) => {
         if (other === sp || !other.player.alive) return;
         const oh = other.player.segments[0];
@@ -768,7 +770,9 @@ export class GameRoom {
         // Threat if other is bigger and close
         if (other.player.length > sp.player.length * 0.8 && dist2 < 500*500 && dist2 < nearestThreatDist) {
           nearestThreatDist = dist2;
-          nearestThreatDir = { x: dx, y: dy };
+          nearestThreatDirX = dx;
+          nearestThreatDirY = dy;
+          hasThreat = true;
         }
       });
 
@@ -791,13 +795,13 @@ export class GameRoom {
       }
 
       // Rare: stash away threat direction for flee state
-      if (nearestThreatDir) {
-        const nd = Math.sqrt(nearestThreatDir.x**2 + nearestThreatDir.y**2);
-        if (nd > 0) { nearestThreatDir.x /= nd; nearestThreatDir.y /= nd; }
+      if (hasThreat) {
+        const nd = Math.sqrt(nearestThreatDirX**2 + nearestThreatDirY**2);
+        if (nd > 0) { nearestThreatDirX /= nd; nearestThreatDirY /= nd; }
         if (mem.state === 'flee') {
           // Run AWAY from threat
-          sp.inputDirection.x = -nearestThreatDir.x;
-          sp.inputDirection.y = -nearestThreatDir.y;
+          sp.inputDirection.x = -nearestThreatDirX;
+          sp.inputDirection.y = -nearestThreatDirY;
         }
       }
     }
