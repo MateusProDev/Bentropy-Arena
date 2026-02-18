@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Player, Food, DevilFruit, GameConfig, GameScreen } from '../types/game';
+import type { Player, Food, DevilFruit, GameConfig, GameScreen, SnakeAccessory } from '../types/game';
 import { DEFAULT_CONFIG, SNAKE_COLORS } from '../types/game';
 
 interface GameStore {
@@ -27,7 +27,7 @@ interface GameStore {
   toggleMinimap: () => void;
 
   // Actions
-  initLocalPlayer: (id: string, name: string, photoURL: string | null, color?: string) => void;
+  initLocalPlayer: (id: string, name: string, photoURL: string | null, color?: string, accessory?: SnakeAccessory) => void;
   updateLocalPlayer: (updates: Partial<Player>) => void;
   setPlayers: (players: Map<string, Player>) => void;
   setFoods: (foods: Food[]) => void;
@@ -58,7 +58,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   minimapVisible: true,
   toggleMinimap: () => set((s) => ({ minimapVisible: !s.minimapVisible })),
 
-  initLocalPlayer: (id, name, photoURL, selectedColor?: string) => {
+  initLocalPlayer: (id, name, photoURL, selectedColor?: string, accessory?: SnakeAccessory) => {
     const color = selectedColor || SNAKE_COLORS[Math.floor(Math.random() * SNAKE_COLORS.length)];
     const worldSize = get().config.worldSize;
     const startX = Math.random() * (worldSize - 400) + 200;
@@ -84,6 +84,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       lastUpdate: Date.now(),
       activeAbility: null,
       abilityEndTime: 0,
+      accessory: accessory || 'none',
     };
 
     set({ localPlayer: player, isPlaying: true, deathInfo: null, gameSession: get().gameSession + 1 });

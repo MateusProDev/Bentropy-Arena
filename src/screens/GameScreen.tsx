@@ -380,15 +380,16 @@ export default function GameScreen() {
   const localPlayer = useGameStore((s) => s.localPlayer);
   const remotePlayers = useGameStore((s) => s.players);
 
-  // Build live leaderboard from all players
+  // Build live leaderboard from ALL players — ranked by LENGTH (universal top 10)
   const leaderboard = useMemo(() => {
-    const entries: { name: string; score: number; color: string; isLocal: boolean }[] = [];
+    const entries: { name: string; score: number; length: number; color: string; isLocal: boolean }[] = [];
 
     // Add local player
     if (localPlayer?.alive) {
       entries.push({
         name: localPlayer.name,
         score: Math.floor(score),
+        length: Math.floor(localPlayer.length),
         color: localPlayer.color,
         isLocal: true,
       });
@@ -400,12 +401,13 @@ export default function GameScreen() {
       entries.push({
         name: p.name,
         score: Math.floor(p.score),
+        length: Math.floor(p.length),
         color: p.color,
         isLocal: false,
       });
     });
 
-    return entries.sort((a, b) => b.score - a.score);
+    return entries.sort((a, b) => b.length - a.length);
   }, [localPlayer, remotePlayers, score]);
 
   const handleBoostStart = useCallback(() => {

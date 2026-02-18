@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { getPlayerStats } from '../services/leaderboard';
-import type { LeaderboardEntry } from '../types/game';
-import { SNAKE_COLORS } from '../types/game';
+import type { LeaderboardEntry, SnakeAccessory } from '../types/game';
+import { SNAKE_COLORS, SNAKE_ACCESSORIES } from '../types/game';
 
 export default function MenuScreen() {
   const { user, signOut } = useAuthStore();
@@ -11,6 +11,7 @@ export default function MenuScreen() {
   const [stats, setStats] = useState<LeaderboardEntry | null>(null);
   const [selectedColor, setSelectedColor] = useState(SNAKE_COLORS[0]);
   const [playerName, setPlayerName] = useState('');
+  const [selectedAccessory, setSelectedAccessory] = useState<SnakeAccessory>('none');
 
   useEffect(() => {
     if (user) {
@@ -27,7 +28,7 @@ export default function MenuScreen() {
       try { await document.documentElement.requestFullscreen(); } catch {}
       try { await (screen.orientation as any).lock('landscape'); } catch {}
     }
-    initLocalPlayer(user.uid, playerName || user.displayName || 'Player', user.photoURL, selectedColor);
+    initLocalPlayer(user.uid, playerName || user.displayName || 'Player', user.photoURL, selectedColor, selectedAccessory);
     setScreen('game');
   };
 
@@ -90,7 +91,7 @@ export default function MenuScreen() {
           </div>
 
           {/* Color picker */}
-          <div className="mb-4 sm:mb-6">
+          <div className="mb-3 sm:mb-4">
             <label className="text-gray-400 text-xs sm:text-sm mb-2 block">Cor da cobra</label>
             <div className="flex flex-wrap gap-1.5 sm:gap-2">
               {SNAKE_COLORS.map((color) => (
@@ -104,6 +105,28 @@ export default function MenuScreen() {
                     }`}
                   style={{ backgroundColor: color }}
                 />
+              ))}
+            </div>
+          </div>
+
+          {/* Accessory picker */}
+          <div className="mb-4 sm:mb-6">
+            <label className="text-gray-400 text-xs sm:text-sm mb-2 block">Acessório</label>
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+              {SNAKE_ACCESSORIES.map((acc) => (
+                <button
+                  key={acc.id}
+                  onClick={() => setSelectedAccessory(acc.id)}
+                  className={`flex flex-col items-center justify-center rounded-xl py-2 px-1 transition-all duration-200 cursor-pointer
+                    ${selectedAccessory === acc.id
+                      ? 'bg-emerald-500/20 ring-2 ring-emerald-400 scale-105'
+                      : 'bg-gray-800/50 hover:bg-gray-700/50 opacity-70 hover:opacity-100'
+                    }`}
+                  title={acc.name}
+                >
+                  <span className="text-xl sm:text-2xl leading-none">{acc.emoji}</span>
+                  <span className="text-[9px] sm:text-[10px] text-gray-400 mt-1 truncate w-full text-center">{acc.name}</span>
+                </button>
               ))}
             </div>
           </div>

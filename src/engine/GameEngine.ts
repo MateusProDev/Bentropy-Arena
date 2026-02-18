@@ -122,7 +122,7 @@ export class GameEngine {
   public killedByName: string | null = null;
 
   // Rankings
-  private playerRankings: Map<string, number> = new Map();
+  // playerRankings removed – crown only in HUD now
 
   // ── Performance caches ──────────────────────────────────────
   private foodGrid = new FoodGrid(120);
@@ -227,8 +227,8 @@ export class GameEngine {
     if (devilFruits) this.devilFruits = devilFruits;
   }
 
-  public updateRankings(rankings: Map<string, number>): void {
-    this.playerRankings = rankings;
+  public updateRankings(_rankings: Map<string, number>): void {
+    // Rankings used in HUD only now – no-op
   }
 
   public start(): void {
@@ -376,10 +376,10 @@ export class GameEngine {
       this.checkPlayerCollisions();
     }
 
-    // Dynamic zoom
+    // Dynamic zoom — smoother, more generous for large snakes
     const playerLen = this.localPlayer.length;
-    this.targetZoom = Math.max(0.22, Math.min(1.0, 1.0 / (1 + Math.max(0, playerLen - 10) * 0.002)));
-    this.zoom += (this.targetZoom - this.zoom) * 0.03;
+    this.targetZoom = Math.max(0.18, Math.min(1.0, 1.05 / (1 + Math.max(0, playerLen - 10) * 0.0025)));
+    this.zoom += (this.targetZoom - this.zoom) * 0.025;
 
     // Camera
     this.camera.x = newHeadX - this.canvas.width / (2 * this.zoom);
@@ -862,8 +862,9 @@ export class GameEngine {
   }
 
   private getThicknessMult(len: number): number {
+    // Fatter, more satisfying growth curve: starts thick, grows steadily
     const effective = Math.max(0, len - 10);
-    return 1 + Math.log2(1 + effective / 12) * 0.9;
+    return 1.2 + Math.log2(1 + effective / 8) * 1.1;
   }
 
   private renderSnake(ctx: CanvasRenderingContext2D, player: Player, isLocal = false): void {
@@ -879,11 +880,11 @@ export class GameEngine {
 
     // Shadow for remote snakes (limited segments)
     if (!isLocal) {
-      const shadowOff = baseSize * 0.4;
+      const shadowOff = baseSize * 0.35;
       ctx.save();
-      ctx.globalAlpha = 0.12;
+      ctx.globalAlpha = 0.15;
       ctx.strokeStyle = '#000';
-      ctx.lineWidth = baseSize * 1.8;
+      ctx.lineWidth = baseSize * 2.0;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.beginPath();
@@ -945,30 +946,46 @@ export class GameEngine {
       return;
     }
 
-    // Draw body
+    // Draw body — improved 3-layer technique for 3D depth
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.shadowBlur = 0;
 
+    // Layer 1: dark outline/border
     ctx.strokeStyle = strokeColor;
-    this.drawSmoothSnakePath(ctx, visSegs, 1.3);
+    this.drawSmoothSnakePath(ctx, visSegs, 1.35);
 
+    // Layer 2: main body color
     ctx.strokeStyle = bodyColor;
-    this.drawSmoothSnakePath(ctx, visSegs, 1.0);
+    this.drawSmoothSnakePath(ctx, visSegs, 1.05);
 
-    ctx.strokeStyle = bodyColorLight + 'a0';
-    this.drawSmoothSnakePath(ctx, visSegs, 0.35);
+    // Layer 3: belly scales pattern (alternating lighter bands)
+    const patternLight = cachedLighten(bodyColor, 18);
+    for (let si = 0; si < visSegs.length - 1; si += 3) {
+      const s = visSegs[si];
+      if (s.r < 0) continue;
+      const r = s.r * 0.45;
+      if (r < 1.5) continue;
+      ctx.fillStyle = patternLight + '50';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Layer 4: specular highlight strip (top-center shine)
+    ctx.strokeStyle = bodyColorLight + 'b0';
+    this.drawSmoothSnakePath(ctx, visSegs, 0.30);
 
     ctx.restore();
 
     // === Head ===
     const head = segments[0];
-    const headSize = baseSize * 1.2;
+    const headSize = baseSize * 1.25;
 
-    // Head glow — reduced shadowBlur (12 instead of 16)
+    // Head glow
     ctx.shadowColor = abilityGlow || color;
-    ctx.shadowBlur = (isLocal || player.boosting || abilityGlow) ? 12 : 0;
+    ctx.shadowBlur = (isLocal || player.boosting || abilityGlow) ? 14 : 0;
 
     // Head gradient using cached colors
     const headLightColor = cachedLighten(bodyColor, 50);
@@ -1088,11 +1105,8 @@ export class GameEngine {
       ctx.stroke();
     }
 
-    // Crown for top 3
-    const rank = this.playerRankings.get(player.id);
-    if (rank && rank <= 3) {
-      this.renderCrown(ctx, head.x, head.y - headSize - 2, headSize * 0.7, rank);
-    }
+    // Accessory rendering
+    this.renderAccessory(ctx, player, head, headSize, dir);
 
     ctx.globalAlpha = 1;
   }
@@ -1152,16 +1166,10 @@ export class GameEngine {
     const fontScale = Math.min(1 / this.zoom, 1.6);
     const nameFontSize = Math.round(14 * fontScale);
     const scoreFontSize = Math.round(11 * fontScale);
-    const yOffset = this.config.segmentSize * 2.5 * fontScale;
+    const yOffset = this.config.segmentSize * 2.8 * fontScale;
     const y = head.y - yOffset;
 
-    const rank = this.playerRankings.get(player.id);
-    let prefix = '';
-    if (rank === 1) prefix = '\u{1F451} ';
-    else if (rank === 2) prefix = '\u{1FA99} ';
-    else if (rank === 3) prefix = '\u{1F949} ';
-
-    const displayName = prefix + player.name;
+    const displayName = player.name;
 
     ctx.font = `bold ${nameFontSize}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
@@ -1170,12 +1178,12 @@ export class GameEngine {
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillText(displayName, head.x + 1, y + 1);
 
-    ctx.fillStyle = rank === 1 ? '#ffd700' : rank === 2 ? '#c0c0c0' : rank === 3 ? '#cd7f32' : '#ffffff';
+    ctx.fillStyle = '#ffffff';
     ctx.fillText(displayName, head.x, y);
 
     ctx.font = `${scoreFontSize}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = player.color;
-    ctx.fillText(`${Math.floor(player.score)}`, head.x, y - nameFontSize - 2);
+    ctx.fillText(`🐍 ${Math.floor(player.length)}`, head.x, y - nameFontSize - 2);
 
     if (player.activeAbility) {
       ctx.font = `${Math.round(9 * fontScale)}px Inter, system-ui, sans-serif`;
@@ -1228,6 +1236,322 @@ export class GameEngine {
     }
     ctx.fill();
     ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  // ── Accessory rendering on snake head ───────────────────────
+  private renderAccessory(
+    ctx: CanvasRenderingContext2D,
+    player: Player,
+    head: Vector2D,
+    headSize: number,
+    dir: Vector2D
+  ): void {
+    const acc = player.accessory;
+    if (!acc || acc === 'none') return;
+
+    const angle = Math.atan2(dir.y, dir.x);
+    const perpX = -dir.y;
+    const perpY = dir.x;
+
+    ctx.save();
+
+    switch (acc) {
+      case 'sunglasses': {
+        // Cool shades over eyes
+        const fwd = headSize * 0.25;
+        const eyeOff = headSize * 0.4;
+        const cx1 = head.x + dir.x * fwd + perpX * eyeOff * 0.5;
+        const cy1 = head.y + dir.y * fwd + perpY * eyeOff * 0.5;
+        const cx2 = head.x + dir.x * fwd - perpX * eyeOff * 0.5;
+        const cy2 = head.y + dir.y * fwd - perpY * eyeOff * 0.5;
+        const glassW = headSize * 0.9;
+        const glassH = headSize * 0.35;
+
+        ctx.save();
+        ctx.translate((cx1 + cx2) / 2, (cy1 + cy2) / 2);
+        ctx.rotate(angle);
+        // Bridge
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = headSize * 0.06;
+        ctx.beginPath();
+        ctx.moveTo(-glassW * 0.12, 0);
+        ctx.lineTo(glassW * 0.12, 0);
+        ctx.stroke();
+        // Left lens
+        ctx.fillStyle = 'rgba(20,20,30,0.85)';
+        ctx.beginPath();
+        ctx.ellipse(-glassW * 0.3, 0, glassW * 0.25, glassH * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.stroke();
+        // Right lens
+        ctx.beginPath();
+        ctx.ellipse(glassW * 0.3, 0, glassW * 0.25, glassH * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Shine
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.beginPath();
+        ctx.ellipse(-glassW * 0.35, -glassH * 0.15, glassW * 0.08, glassH * 0.15, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(glassW * 0.25, -glassH * 0.15, glassW * 0.08, glassH * 0.15, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        break;
+      }
+      case 'cool_glasses': {
+        const cx = head.x + dir.x * headSize * 0.25;
+        const cy = head.y + dir.y * headSize * 0.25;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(angle);
+        const r = headSize * 0.22;
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = headSize * 0.05;
+        ctx.beginPath(); ctx.arc(-r * 1.3, 0, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(r * 1.3, 0, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-r * 0.3, 0); ctx.lineTo(r * 0.3, 0); ctx.stroke();
+        ctx.fillStyle = 'rgba(200,220,255,0.15)';
+        ctx.beginPath(); ctx.arc(-r * 1.3, 0, r * 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(r * 1.3, 0, r * 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+        break;
+      }
+      case 'straw_hat': {
+        const hatX = head.x - dir.x * headSize * 0.05;
+        const hatY = head.y - dir.y * headSize * 0.05;
+        ctx.save();
+        ctx.translate(hatX, hatY);
+        ctx.rotate(angle - Math.PI / 2);
+        // Brim
+        ctx.fillStyle = '#e8c862';
+        ctx.beginPath();
+        ctx.ellipse(0, -headSize * 0.15, headSize * 1.4, headSize * 0.45, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#b8960f';
+        ctx.lineWidth = headSize * 0.05;
+        ctx.stroke();
+        // Dome
+        ctx.fillStyle = '#f0d668';
+        ctx.beginPath();
+        ctx.ellipse(0, -headSize * 0.4, headSize * 0.75, headSize * 0.55, 0, Math.PI, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#c8a830';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.stroke();
+        // Red ribbon
+        ctx.fillStyle = '#cc2222';
+        ctx.fillRect(-headSize * 0.75, -headSize * 0.42, headSize * 1.5, headSize * 0.14);
+        // Straw texture
+        ctx.strokeStyle = 'rgba(184,150,15,0.3)';
+        ctx.lineWidth = 0.8;
+        for (let li = -3; li <= 3; li++) {
+          ctx.beginPath();
+          ctx.moveTo(-headSize * 1.2, -headSize * 0.15 + li * headSize * 0.06);
+          ctx.lineTo(headSize * 1.2, -headSize * 0.15 + li * headSize * 0.06);
+          ctx.stroke();
+        }
+        ctx.restore();
+        break;
+      }
+      case 'ninja_headband': {
+        const hbX = head.x - dir.x * headSize * 0.1;
+        const hbY = head.y - dir.y * headSize * 0.1;
+        ctx.save();
+        ctx.translate(hbX, hbY);
+        ctx.rotate(angle);
+        // Band
+        ctx.fillStyle = '#1a2744';
+        ctx.fillRect(-headSize * 1.1, -headSize * 0.4, headSize * 2.2, headSize * 0.35);
+        // Metal plate
+        ctx.fillStyle = '#8899aa';
+        ctx.beginPath();
+        ctx.roundRect(-headSize * 0.4, -headSize * 0.42, headSize * 0.8, headSize * 0.39, headSize * 0.06);
+        ctx.fill();
+        ctx.strokeStyle = '#556677';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.stroke();
+        // Swirl symbol
+        ctx.strokeStyle = '#334455';
+        ctx.lineWidth = headSize * 0.05;
+        ctx.beginPath();
+        ctx.arc(0, -headSize * 0.23, headSize * 0.1, 0, Math.PI * 1.5);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, -headSize * 0.33);
+        ctx.lineTo(headSize * 0.05, -headSize * 0.13);
+        ctx.stroke();
+        // Tail ribbons
+        ctx.strokeStyle = '#1a2744';
+        ctx.lineWidth = headSize * 0.12;
+        ctx.lineCap = 'round';
+        const tailStart = headSize * 1.1;
+        ctx.beginPath();
+        ctx.moveTo(-tailStart, -headSize * 0.22);
+        ctx.quadraticCurveTo(-tailStart - headSize * 0.3, -headSize * 0.1, -tailStart - headSize * 0.5, -headSize * 0.35);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-tailStart, -headSize * 0.22);
+        ctx.quadraticCurveTo(-tailStart - headSize * 0.2, 0, -tailStart - headSize * 0.4, -headSize * 0.05);
+        ctx.stroke();
+        ctx.restore();
+        break;
+      }
+      case 'scouter': {
+        const scX = head.x + dir.x * headSize * 0.3 + perpX * headSize * 0.45;
+        const scY = head.y + dir.y * headSize * 0.3 + perpY * headSize * 0.45;
+        ctx.save();
+        ctx.translate(scX, scY);
+        ctx.rotate(angle);
+        ctx.fillStyle = '#888';
+        ctx.fillRect(-headSize * 0.08, -headSize * 0.15, headSize * 0.15, headSize * 0.3);
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.beginPath();
+        ctx.moveTo(headSize * 0.07, 0);
+        ctx.lineTo(headSize * 0.35, -headSize * 0.08);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(0,255,120,0.4)';
+        ctx.strokeStyle = '#66cc66';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.beginPath();
+        ctx.arc(headSize * 0.35, -headSize * 0.08, headSize * 0.18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#00ff88';
+        ctx.font = `bold ${Math.round(headSize * 0.13)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`${Math.floor(player.length)}`, headSize * 0.35, -headSize * 0.04);
+        ctx.restore();
+        break;
+      }
+      case 'pirate_bandana': {
+        const bx = head.x - dir.x * headSize * 0.05;
+        const by = head.y - dir.y * headSize * 0.05;
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(angle - Math.PI / 2);
+        ctx.fillStyle = '#cc2222';
+        ctx.beginPath();
+        ctx.ellipse(0, -headSize * 0.2, headSize * 1.05, headSize * 0.35, 0, Math.PI, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#aa1111';
+        ctx.beginPath();
+        ctx.arc(0, -headSize * 0.2, headSize * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(0, -headSize * 0.42, headSize * 0.15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = headSize * 0.04;
+        ctx.beginPath();
+        ctx.moveTo(-headSize * 0.15, -headSize * 0.32);
+        ctx.lineTo(headSize * 0.15, -headSize * 0.52);
+        ctx.moveTo(headSize * 0.15, -headSize * 0.32);
+        ctx.lineTo(-headSize * 0.15, -headSize * 0.52);
+        ctx.stroke();
+        ctx.restore();
+        break;
+      }
+      case 'crown': {
+        this.renderCrown(ctx, head.x, head.y - headSize - 2, headSize * 0.7, 1);
+        break;
+      }
+      case 'cat_ears': {
+        const ex = head.x - dir.x * headSize * 0.1;
+        const ey = head.y - dir.y * headSize * 0.1;
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.rotate(angle - Math.PI / 2);
+        ctx.fillStyle = player.color;
+        ctx.beginPath();
+        ctx.moveTo(-headSize * 0.6, -headSize * 0.1);
+        ctx.lineTo(-headSize * 0.35, -headSize * 0.85);
+        ctx.lineTo(-headSize * 0.1, -headSize * 0.1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffb6c1';
+        ctx.beginPath();
+        ctx.moveTo(-headSize * 0.5, -headSize * 0.15);
+        ctx.lineTo(-headSize * 0.35, -headSize * 0.6);
+        ctx.lineTo(-headSize * 0.2, -headSize * 0.15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = player.color;
+        ctx.beginPath();
+        ctx.moveTo(headSize * 0.6, -headSize * 0.1);
+        ctx.lineTo(headSize * 0.35, -headSize * 0.85);
+        ctx.lineTo(headSize * 0.1, -headSize * 0.1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ffb6c1';
+        ctx.beginPath();
+        ctx.moveTo(headSize * 0.5, -headSize * 0.15);
+        ctx.lineTo(headSize * 0.35, -headSize * 0.6);
+        ctx.lineTo(headSize * 0.2, -headSize * 0.15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        break;
+      }
+      case 'halo': {
+        const haloY = head.y - dir.y * headSize * 0.2 - headSize * 1.5;
+        const haloX = head.x - dir.x * headSize * 0.2;
+        ctx.save();
+        ctx.translate(haloX, haloY);
+        ctx.rotate(angle - Math.PI / 2);
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = headSize * 0.1;
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, headSize * 0.7, headSize * 0.2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        break;
+      }
+      case 'devil_horns': {
+        const dhx = head.x - dir.x * headSize * 0.1;
+        const dhy = head.y - dir.y * headSize * 0.1;
+        ctx.save();
+        ctx.translate(dhx, dhy);
+        ctx.rotate(angle - Math.PI / 2);
+        ctx.fillStyle = '#8b0000';
+        ctx.beginPath();
+        ctx.moveTo(-headSize * 0.5, -headSize * 0.15);
+        ctx.quadraticCurveTo(-headSize * 0.7, -headSize * 0.8, -headSize * 0.2, -headSize * 0.7);
+        ctx.lineTo(-headSize * 0.25, -headSize * 0.15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(headSize * 0.5, -headSize * 0.15);
+        ctx.quadraticCurveTo(headSize * 0.7, -headSize * 0.8, headSize * 0.2, -headSize * 0.7);
+        ctx.lineTo(headSize * 0.25, -headSize * 0.15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,100,100,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(-headSize * 0.45, -headSize * 0.2);
+        ctx.quadraticCurveTo(-headSize * 0.6, -headSize * 0.6, -headSize * 0.25, -headSize * 0.55);
+        ctx.lineTo(-headSize * 0.3, -headSize * 0.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(headSize * 0.45, -headSize * 0.2);
+        ctx.quadraticCurveTo(headSize * 0.6, -headSize * 0.6, headSize * 0.25, -headSize * 0.55);
+        ctx.lineTo(headSize * 0.3, -headSize * 0.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        break;
+      }
+    }
 
     ctx.restore();
   }

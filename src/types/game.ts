@@ -7,6 +7,44 @@ export interface Vector2D {
   y: number;
 }
 
+// ============================================================
+// Snake Accessories (Anime-inspired cosmetics)
+// ============================================================
+
+export type SnakeAccessory =
+  | 'none'
+  | 'sunglasses'
+  | 'cool_glasses'
+  | 'straw_hat'       // Luffy (One Piece)
+  | 'ninja_headband'  // Naruto
+  | 'scouter'         // Dragon Ball
+  | 'pirate_bandana'  // Zoro
+  | 'crown'           // Royal
+  | 'cat_ears'        // Neko
+  | 'halo'            // Angel
+  | 'devil_horns';    // Demon
+
+export interface AccessoryDef {
+  id: SnakeAccessory;
+  name: string;
+  emoji: string;
+  category: 'head' | 'eyes' | 'aura';
+}
+
+export const SNAKE_ACCESSORIES: AccessoryDef[] = [
+  { id: 'none',            name: 'Nenhum',           emoji: '❌', category: 'head' },
+  { id: 'sunglasses',      name: 'Óculos de Sol',    emoji: '😎', category: 'eyes' },
+  { id: 'cool_glasses',    name: 'Óculos Nerd',      emoji: '🤓', category: 'eyes' },
+  { id: 'straw_hat',       name: 'Chapéu de Palha',  emoji: '👒', category: 'head' },
+  { id: 'ninja_headband',  name: 'Bandana Ninja',    emoji: '🥷', category: 'head' },
+  { id: 'scouter',         name: 'Scouter',          emoji: '📡', category: 'eyes' },
+  { id: 'pirate_bandana',  name: 'Bandana Pirata',   emoji: '🏴‍☠️', category: 'head' },
+  { id: 'crown',           name: 'Coroa Real',       emoji: '👑', category: 'head' },
+  { id: 'cat_ears',        name: 'Orelhas de Gato',  emoji: '🐱', category: 'head' },
+  { id: 'halo',            name: 'Auréola',          emoji: '😇', category: 'aura' },
+  { id: 'devil_horns',     name: 'Chifres',          emoji: '😈', category: 'head' },
+];
+
 export interface Player {
   id: string;
   name: string;
@@ -22,6 +60,7 @@ export interface Player {
   lastUpdate: number;
   activeAbility: DevilFruitAbility | null;
   abilityEndTime: number;
+  accessory?: SnakeAccessory;
 }
 
 export interface Food {

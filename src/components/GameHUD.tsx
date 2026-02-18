@@ -5,6 +5,7 @@ import { DEVIL_FRUITS } from '../types/game';
 interface LeaderboardPlayer {
   name: string;
   score: number;
+  length: number;
   color: string;
   isLocal: boolean;
 }
@@ -139,24 +140,40 @@ export default function GameHUD({
 
       {/* ── Leaderboard ── */}
       {!compact && (
-        <div className="fixed z-40" style={{ top: abilityDef ? (isMobile ? 140 : 178) : (isMobile ? 76 : 108), left: isMobile ? 6 : 12, width: isMobile ? 148 : 190 }}>
-          <div style={{ background: 'rgba(8,13,26,0.82)', backdropFilter: 'blur(14px)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '8px 10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-              <span style={{ fontSize: 11 }}>🏆</span>
-              <span style={{ fontSize: 9, fontWeight: 700, color: '#6b7280', letterSpacing: 1.5, textTransform: 'uppercase' }}>Ranking</span>
+        <div className="fixed z-40" style={{ top: abilityDef ? (isMobile ? 140 : 178) : (isMobile ? 76 : 108), left: isMobile ? 6 : 12, width: isMobile ? 155 : 200 }}>
+          <div style={{ background: 'rgba(8,13,26,0.88)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, padding: '10px 12px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
+              <span style={{ fontSize: 12 }}>🏆</span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: '#10b981', letterSpacing: 2, textTransform: 'uppercase' }}>Top 10 Global</span>
             </div>
             {leaderboard.slice(0, 10).map((p, i) => {
-              const medals = ['👑', '🥈', '🥉'];
+              const medals = ['🥇', '🥈', '🥉'];
               const nameColors = ['#ffd700', '#c0c0c0', '#cd7f32'];
+              const isFirst = i === 0;
               return (
-                <div key={p.name + i} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '2px 5px', borderRadius: 6, background: p.isLocal ? 'rgba(16,185,129,0.1)' : 'transparent', border: p.isLocal ? '1px solid rgba(16,185,129,0.18)' : '1px solid transparent', fontSize: isMobile ? 9 : 11, marginBottom: 2 }}>
-                  <span style={{ fontSize: isMobile ? 8 : 10, minWidth: 16, textAlign: 'center', color: '#4b5563' }}>{i < 3 ? medals[i] : `${i + 1}`}</span>
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: i < 3 ? nameColors[i] : p.isLocal ? '#fff' : '#6b7280', fontWeight: p.isLocal ? 700 : 400 }}>
+                <div key={p.name + i} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '3px 6px', borderRadius: 8,
+                  background: p.isLocal ? 'rgba(16,185,129,0.12)' : isFirst ? 'rgba(255,215,0,0.06)' : 'transparent',
+                  border: p.isLocal ? '1px solid rgba(16,185,129,0.22)' : '1px solid transparent',
+                  fontSize: isMobile ? 10 : 12, marginBottom: 2,
+                  transition: 'background 0.2s',
+                }}>
+                  <span style={{ fontSize: isMobile ? 9 : 11, minWidth: 18, textAlign: 'center', color: '#4b5563', fontWeight: 700 }}>
+                    {i < 3 ? medals[i] : `${i + 1}`}
+                  </span>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, flexShrink: 0, boxShadow: `0 0 6px ${p.color}60` }} />
+                  <span style={{
+                    flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    color: i < 3 ? nameColors[i] : p.isLocal ? '#fff' : '#9ca3af',
+                    fontWeight: p.isLocal || i < 3 ? 700 : 400,
+                    position: 'relative', display: 'inline-flex', alignItems: 'center',
+                  }}>
+                    {isFirst && <span style={{ fontSize: 9, marginRight: 1, verticalAlign: 'top' }}>👑</span>}
                     {p.name}
                   </span>
-                  <span style={{ fontSize: isMobile ? 8 : 9, color: '#4b5563', fontVariantNumeric: 'tabular-nums' }}>
-                    {p.score >= 1000 ? `${(p.score / 1000).toFixed(1)}k` : p.score}
+                  <span style={{ fontSize: isMobile ? 8 : 10, color: '#6b7280', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                    🐍 {Math.floor(p.length)}
                   </span>
                 </div>
               );
