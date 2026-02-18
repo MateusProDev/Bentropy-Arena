@@ -10,22 +10,19 @@ import { WebSocket } from 'ws';
 // ========================
 class SpatialHash {
   private cells: Map<number, string[]> = new Map();
-  private cellSize: number;
+  private cs: number;
 
-  constructor(cellSize: number) {
-    this.cellSize = cellSize;
-  }
+  constructor(cs: number) { this.cs = cs; }
 
-  private key(cx: number, cy: number): number {
+  private k(cx: number, cy: number): number {
     return ((cx & 0xffff) << 16) | (cy & 0xffff);
   }
 
   clear(): void { this.cells.clear(); }
 
   insert(x: number, y: number, id: string): void {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
-    const k = this.key(cx, cy);
+    const cx = (x / this.cs) | 0, cy = (y / this.cs) | 0;
+    const k = this.k(cx, cy);
     let cell = this.cells.get(k);
     if (!cell) { cell = []; this.cells.set(k, cell); }
     cell.push(id);
@@ -33,17 +30,73 @@ class SpatialHash {
 
   query(x: number, y: number, radius: number): string[] {
     const result: string[] = [];
-    const minCx = Math.floor((x - radius) / this.cellSize);
-    const maxCx = Math.floor((x + radius) / this.cellSize);
-    const minCy = Math.floor((y - radius) / this.cellSize);
-    const maxCy = Math.floor((y + radius) / this.cellSize);
+    const minCx = ((x - radius) / this.cs) | 0, maxCx = ((x + radius) / this.cs) | 0;
+    const minCy = ((y - radius) / this.cs) | 0, maxCy = ((y + radius) / this.cs) | 0;
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
-        const cell = this.cells.get(this.key(cx, cy));
+        const cell = this.cells.get(this.k(cx, cy));
         if (cell) for (const id of cell) result.push(id);
       }
     }
     return result;
+  }
+}
+
+// ========================
+// Food Spatial Hash (index-based for O(1) nearest-food queries)
+// ========================
+class FoodSpatialHash {
+  private cells: Map<number, number[]> = new Map();
+  private cs: number;
+  constructor(cs: number) { this.cs = cs; }
+  private k(cx: number, cy: number): number {
+    return ((cx & 0xffff) << 16) | (cy & 0xffff);
+  }
+  clear(): void { this.cells.clear(); }
+  build(foods: Food[]): void {
+    this.cells.clear();
+    for (let i = 0; i < foods.length; i++) {
+      const f = foods[i];
+      const cx = (f.position.x / this.cs) | 0, cy = (f.position.y / this.cs) | 0;
+      const k = this.k(cx, cy);
+      let c = this.cells.get(k);
+      if (!c) { c = []; this.cells.set(k, c); }
+      c.push(i);
+    }
+  }
+  queryNearest(x: number, y: number, r: number, foods: Food[]): number {
+    let bestIdx = -1, bestDist = r * r;
+    const minCx = ((x - r) / this.cs) | 0, maxCx = ((x + r) / this.cs) | 0;
+    const minCy = ((y - r) / this.cs) | 0, maxCy = ((y + r) / this.cs) | 0;
+    for (let cx = minCx; cx <= maxCx; cx++)
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const c = this.cells.get(this.k(cx, cy));
+        if (!c) continue;
+        for (const idx of c) {
+          const f = foods[idx];
+          const dx = f.position.x - x, dy = f.position.y - y;
+          const d = dx * dx + dy * dy;
+          if (d < bestDist) { bestDist = d; bestIdx = idx; }
+        }
+      }
+    return bestIdx;
+  }
+  queryInRange(x: number, y: number, r: number, foods: Food[]): number[] {
+    const out: number[] = [];
+    const rSq = r * r;
+    const minCx = ((x - r) / this.cs) | 0, maxCx = ((x + r) / this.cs) | 0;
+    const minCy = ((y - r) / this.cs) | 0, maxCy = ((y + r) / this.cs) | 0;
+    for (let cx = minCx; cx <= maxCx; cx++)
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const c = this.cells.get(this.k(cx, cy));
+        if (!c) continue;
+        for (const idx of c) {
+          const f = foods[idx];
+          const dx = f.position.x - x, dy = f.position.y - y;
+          if (dx * dx + dy * dy < rSq) out.push(idx);
+        }
+      }
+    return out;
   }
 }
 
@@ -167,8 +220,19 @@ export class GameRoom {
   private readonly minBots = 14;
   // Spatial hash: cell size = 2x segment collision radius for efficiency
   private spatialHash = new SpatialHash(160);
+  // Head spatial hash for O(1) head-to-head collision
+  private headHash = new SpatialHash(100);
+  // Food spatial hash for O(1) bot food queries
+  private foodHash = new FoodSpatialHash(300);
+  private foodHashDirty = true;
+  // Monotonic food ID counter (avoids Date.now + Math.random per food)
+  private foodIdCounter = 0;
   // Pre-built per-tick head position index for fast O(1) lookup
   private readonly botRespawnQueue: Array<{ at: number }> = [];
+  // Pooled sets to avoid per-tick allocation
+  private readonly _deadPlayers = new Set<string>();
+  private readonly _checked = new Set<string>();
+  private readonly _seenIds = new Set<string>();
 
   constructor(config?: Partial<GameConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -326,7 +390,8 @@ export class GameRoom {
       const food = this.foods[foodIdx];
       sp.player.score += food.value;
       sp.player.length += this.config.growthRate;
-      this.foods[foodIdx] = this.createFood(); // respawn food
+      this.foods[foodIdx] = this.createFood();
+      this.foodHashDirty = true;
     }
   }
 
@@ -367,18 +432,27 @@ export class GameRoom {
   private update(): void {
     this.tick++;
     const now = Date.now();
-    const deadPlayers: Set<string> = new Set();
+    this._deadPlayers.clear();
+    const deadPlayers = this._deadPlayers;
 
-    // ══ Phase 0: Rebuild spatial hash from all body segments ══
+    // ══ Phase 0: Rebuild spatial hashes ══
     this.spatialHash.clear();
+    this.headHash.clear();
     this.players.forEach((sp) => {
       if (!sp.player.alive) return;
-      const limit = Math.min(sp.player.segments.length, 80);
+      const segs = sp.player.segments;
+      const limit = Math.min(segs.length, 80);
       for (let i = 1; i < limit; i++) {
-        const s = sp.player.segments[i];
-        this.spatialHash.insert(s.x, s.y, sp.player.id);
+        this.spatialHash.insert(segs[i].x, segs[i].y, sp.player.id);
       }
+      // Insert head into head hash for O(1) head-to-head detection
+      this.headHash.insert(segs[0].x, segs[0].y, sp.player.id);
     });
+    // Rebuild food hash if dirty
+    if (this.foodHashDirty) {
+      this.foodHash.build(this.foods);
+      this.foodHashDirty = false;
+    }
 
     // ══ Phase 1: Move all players ══
     this.players.forEach((sp, id) => {
@@ -422,17 +496,17 @@ export class GameRoom {
           sp.player.segments.pop();
         }
 
-        // Bot food collision
-        const botEatRSq = (this.config.segmentSize + this.config.foodSize) ** 2;
-        for (let i = this.foods.length - 1; i >= 0; i--) {
-          const food = this.foods[i];
-          const dx = nx - food.position.x;
-          const dy = ny - food.position.y;
-          if (dx * dx + dy * dy < botEatRSq) {
+        // Bot food collision via spatial hash: O(1)
+        const botEatR = this.config.segmentSize + this.config.foodSize;
+        const eatIdx = this.foodHash.queryNearest(nx, ny, botEatR, this.foods);
+        if (eatIdx >= 0) {
+          const food = this.foods[eatIdx];
+          const dx = nx - food.position.x, dy = ny - food.position.y;
+          if (dx * dx + dy * dy < botEatR * botEatR) {
             sp.player.score += food.value;
             sp.player.length += this.config.growthRate;
-            this.foods[i] = this.createFood();
-            break;
+            this.foods[eatIdx] = this.createFood();
+            this.foodHashDirty = true;
           }
         }
 
@@ -484,11 +558,11 @@ export class GameRoom {
       // Query only nearby cells — O(1) average
       const queryR = myRadius * 4;
       const nearbyIds = this.spatialHash.query(head.x, head.y, queryR);
-      const checked = new Set<string>();
+      this._checked.clear();
 
       for (const tid of nearbyIds) {
-        if (tid === id || checked.has(tid) || deadPlayers.has(tid)) continue;
-        checked.add(tid);
+        if (tid === id || this._checked.has(tid) || deadPlayers.has(tid)) continue;
+        this._checked.add(tid);
 
         const other = this.players.get(tid);
         if (!other || !other.player.alive) continue;
@@ -511,15 +585,20 @@ export class GameRoom {
         }
       }
 
-      // Head-to-head check (still needed, heads aren't in spatial hash)
+      // Head-to-head check via head spatial hash: O(1)
       if (!deadPlayers.has(id)) {
-        this.players.forEach((other, otherId) => {
-          if (otherId === id || !other.player.alive || deadPlayers.has(otherId)) return;
+        const headCollR = this.config.segmentSize * 1.8;
+        const headCollRSq = headCollR * headCollR;
+        const nearHeads = this.headHash.query(head.x, head.y, headCollR);
+        for (const otherId of nearHeads) {
+          if (otherId === id || deadPlayers.has(otherId)) continue;
+          const other = this.players.get(otherId);
+          if (!other || !other.player.alive) continue;
           const otherHead = other.player.segments[0];
-          if (!otherHead) return;
+          if (!otherHead) continue;
           const hdx = head.x - otherHead.x;
           const hdy = head.y - otherHead.y;
-          if (hdx * hdx + hdy * hdy < (this.config.segmentSize * 1.8) ** 2) {
+          if (hdx * hdx + hdy * hdy < headCollRSq) {
             if (sp.player.length <= other.player.length) {
               this.killPlayer(sp, other.player.name, deadPlayers);
               deadPlayers.add(id);
@@ -529,7 +608,7 @@ export class GameRoom {
               deadPlayers.add(otherId);
             }
           }
-        });
+        }
       }
     });
 
@@ -546,10 +625,12 @@ export class GameRoom {
       }
     });
 
-    // ══ Phase 4: Process bot respawn queue ══
+    // ══ Phase 4: Process bot respawn queue (swap-remove to avoid splice) ══
     for (let qi = this.botRespawnQueue.length - 1; qi >= 0; qi--) {
       if (now >= this.botRespawnQueue[qi].at) {
-        this.botRespawnQueue.splice(qi, 1);
+        // Swap with last element and pop — O(1) instead of O(n) splice
+        this.botRespawnQueue[qi] = this.botRespawnQueue[this.botRespawnQueue.length - 1];
+        this.botRespawnQueue.pop();
         this.spawnBot();
       }
     }
@@ -560,10 +641,11 @@ export class GameRoom {
     }
 
     // ══ Phase 6: Refill food in batches of 50 (avoids GC spike) ══
-    const foodTarget = Math.floor(this.config.foodCount * 0.85);
+    const foodTarget = (this.config.foodCount * 0.85) | 0;
     if (this.foods.length < foodTarget) {
       const batch = Math.min(50, foodTarget - this.foods.length);
       for (let i = 0; i < batch; i++) this.foods.push(this.createFood());
+      this.foodHashDirty = true;
     }
   }
 
@@ -684,9 +766,9 @@ export class GameRoom {
 
     // Varied starting sizes: small / medium / large
     const roll = Math.random();
-    let startLength = roll < 0.45 ? 10 + Math.floor(Math.random()*20)
-                    : roll < 0.80 ? 30 + Math.floor(Math.random()*40)
-                    : 70 + Math.floor(Math.random()*50);
+    let startLength = roll < 0.45 ? 10 + ((Math.random()*20)|0)
+                    : roll < 0.80 ? 30 + ((Math.random()*40)|0)
+                    : 70 + ((Math.random()*50)|0);
 
     const player = this.createPlayer(id, name, color, null);
     player.length = startLength;
@@ -709,7 +791,7 @@ export class GameRoom {
       targetFoodIdx: -1,
       targetPlayerId: '',
       exploreAngle: Math.random() * Math.PI * 2,
-      exploreTurns: 30 + Math.floor(Math.random() * 60),
+      exploreTurns: 30 + ((Math.random() * 60) | 0),
       personalityAggression: aggression,
       personalitySpeed: 0.85 + Math.random() * 0.35,
     };
@@ -753,7 +835,7 @@ export class GameRoom {
     // ── Phase A: State transition ────────────────────────────
     if (mem.stateTimer <= 0) {
       // Re-evaluate state every N ticks
-      mem.stateTimer = 20 + Math.floor(Math.random() * 25);
+      mem.stateTimer = 20 + ((Math.random() * 25) | 0);
 
       // Check danger: is there a large snake nearby?
       let nearestThreatDist = Infinity;
@@ -787,7 +869,7 @@ export class GameRoom {
         // Randomly switch to explore to break loops
         mem.state = 'explore';
         mem.exploreAngle = Math.atan2(sp.inputDirection.y, sp.inputDirection.x) + (Math.random()-0.5)*1.2;
-        mem.exploreTurns = 25 + Math.floor(Math.random()*50);
+        mem.exploreTurns = 25 + ((Math.random()*50)|0);
         mem.stateTimer = mem.exploreTurns;
       } else {
         mem.state = 'hunt';
@@ -818,21 +900,12 @@ export class GameRoom {
       mem.exploreAngle += (Math.random() - 0.5) * 0.04;
 
     } else if (mem.state === 'hunt' || mem.state === 'ambush') {
-      // Find nearest food with a smarter scan (check only 200 foods, not all)
-      let bestFood: Food | null = null;
-      let bestDist = Infinity;
-      const step = Math.max(1, Math.floor(this.foods.length / 200));
-      for (let i = 0; i < this.foods.length; i += step) {
-        const f = this.foods[i];
+      // Find nearest food via food spatial hash: O(1)
+      const nearIdx = this.foodHash.queryNearest(head.x, head.y, 600, this.foods);
+      if (nearIdx >= 0) {
+        const f = this.foods[nearIdx];
         const dx = f.position.x - head.x;
         const dy = f.position.y - head.y;
-        const d = dx*dx + dy*dy;
-        if (d < bestDist) { bestDist = d; bestFood = f; }
-      }
-
-      if (bestFood) {
-        const dx = bestFood.position.x - head.x;
-        const dy = bestFood.position.y - head.y;
         const dist = Math.sqrt(dx*dx + dy*dy);
         if (dist > 0) {
           const steer = dist < 200 ? 0.22 : 0.07;
@@ -861,10 +934,10 @@ export class GameRoom {
     const dangerR = 130 + sp.player.length * 0.4;
     let avoidX = 0, avoidY = 0;
     const nearbyCandidates = this.spatialHash.query(head.x, head.y, dangerR);
-    const seenIds = new Set<string>();
+    this._seenIds.clear();
     for (const cid of nearbyCandidates) {
-      if (cid === sp.player.id || seenIds.has(cid)) continue;
-      seenIds.add(cid);
+      if (cid === sp.player.id || this._seenIds.has(cid)) continue;
+      this._seenIds.add(cid);
       const other = this.players.get(cid);
       if (!other || !other.player.alive) continue;
       // Check only a few body segs close to head
@@ -956,14 +1029,14 @@ export class GameRoom {
 
   private createFood(): Food {
     return {
-      id: `food_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `f${this.foodIdCounter++}`,
       position: {
         x: Math.random() * (this.config.worldSize - 100) + 50,
         y: Math.random() * (this.config.worldSize - 100) + 50,
       },
-      color: FOOD_COLORS[Math.floor(Math.random() * FOOD_COLORS.length)],
+      color: FOOD_COLORS[(Math.random() * FOOD_COLORS.length) | 0],
       size: Math.random() * 4 + 4,
-      value: Math.floor(Math.random() * 3) + 1,
+      value: ((Math.random() * 3) | 0) + 1,
     };
   }
 
@@ -975,22 +1048,23 @@ export class GameRoom {
   }
 
   private dropFood(player: Player): void {
-    const dropCount = Math.min(Math.floor(player.length / 3), 20);
+    const dropCount = Math.min((player.length / 3) | 0, 20);
     for (let i = 0; i < dropCount; i++) {
-      const segIdx = Math.floor(Math.random() * player.segments.length);
+      const segIdx = (Math.random() * player.segments.length) | 0;
       const seg = player.segments[segIdx];
       if (seg) {
         this.foods.push({
-          id: `food_drop_${Date.now()}_${player.id}_${i}`,
+          id: `fd${this.foodIdCounter++}`,
           position: {
             x: seg.x + (Math.random() - 0.5) * 40,
             y: seg.y + (Math.random() - 0.5) * 40,
           },
           color: player.color,
           size: Math.random() * 4 + 5,
-          value: Math.floor(Math.random() * 3) + 2,
+          value: ((Math.random() * 3) | 0) + 2,
         });
       }
     }
+    this.foodHashDirty = true;
   }
 }

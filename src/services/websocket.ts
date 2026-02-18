@@ -16,7 +16,7 @@ class SpatialHash {
   private k(cx: number, cy: number) { return ((cx & 0xffff) << 16) | (cy & 0xffff); }
   clear() { this.cells.clear(); }
   insert(x: number, y: number, id: string) {
-    const cx = Math.floor(x / this.cs), cy = Math.floor(y / this.cs);
+    const cx = (x / this.cs) | 0, cy = (y / this.cs) | 0;
     const k = this.k(cx, cy);
     let c = this.cells.get(k);
     if (!c) { c = []; this.cells.set(k, c); }
@@ -24,14 +24,48 @@ class SpatialHash {
   }
   query(x: number, y: number, r: number): string[] {
     const out: string[] = [];
-    const minCx = Math.floor((x-r)/this.cs), maxCx = Math.floor((x+r)/this.cs);
-    const minCy = Math.floor((y-r)/this.cs), maxCy = Math.floor((y+r)/this.cs);
+    const minCx = ((x - r) / this.cs) | 0, maxCx = ((x + r) / this.cs) | 0;
+    const minCy = ((y - r) / this.cs) | 0, maxCy = ((y + r) / this.cs) | 0;
     for (let cx = minCx; cx <= maxCx; cx++)
       for (let cy = minCy; cy <= maxCy; cy++) {
         const c = this.cells.get(this.k(cx, cy));
         if (c) for (const id of c) out.push(id);
       }
     return out;
+  }
+}
+
+// ── Food spatial hash: O(1) nearest food for bots ────────────
+class FoodSpatialHash {
+  private cells = new Map<number, number[]>(); // cellKey → food indices
+  private cs: number;
+  constructor(cs: number) { this.cs = cs; }
+  private k(cx: number, cy: number) { return ((cx & 0xffff) << 16) | (cy & 0xffff); }
+  clear() { this.cells.clear(); }
+  insert(x: number, y: number, idx: number) {
+    const cx = (x / this.cs) | 0, cy = (y / this.cs) | 0;
+    const k = this.k(cx, cy);
+    let c = this.cells.get(k);
+    if (!c) { c = []; this.cells.set(k, c); }
+    c.push(idx);
+  }
+  queryNearest(x: number, y: number, r: number, foods: Food[]): number {
+    let bestIdx = -1, bestDist = r * r;
+    const minCx = ((x - r) / this.cs) | 0, maxCx = ((x + r) / this.cs) | 0;
+    const minCy = ((y - r) / this.cs) | 0, maxCy = ((y + r) / this.cs) | 0;
+    for (let cx = minCx; cx <= maxCx; cx++)
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const c = this.cells.get(this.k(cx, cy));
+        if (!c) continue;
+        for (const idx of c) {
+          const f = foods[idx];
+          if (!f) continue;
+          const dx = f.position.x - x, dy = f.position.y - y;
+          const d = dx * dx + dy * dy;
+          if (d < bestDist) { bestDist = d; bestIdx = idx; }
+        }
+      }
+    return bestIdx;
   }
 }
 
@@ -181,7 +215,11 @@ export class WSClient {
   // ── Bot memory map ────────────────────────────────────────
   private botMem = new Map<string, BotMemory>();
   private spatialHash = new SpatialHash(180);
+  private foodHash = new FoodSpatialHash(300);
+  private foodHashDirty = true;
   private botRespawnQueue: Array<{ at: number; idx: number }> = [];
+  // Reusable Set to avoid per-tick allocation
+  private readonly _reusableSeenSet = new Set<string>();
   private botNameCounter = 0;
   private readonly TARGET_BOTS = 15;
   private readonly BOT_NAMES = [
@@ -327,9 +365,9 @@ export class WSClient {
       const thick = 1 + Math.log2(1 + Math.max(0, bot.length - 10) / 12) * 0.9;
       const radius = DEFAULT_CONFIG.segmentSize * thick;
 
-      // ── Phase A: State evaluation (every ~30 ticks) ────────
+      // ── Phase A: State evaluation (every ~25 ticks) ────────
       if (mem.stateTimer <= 0) {
-        mem.stateTimer = 20 + Math.floor(Math.random() * 25);
+        mem.stateTimer = 20 + ((Math.random() * 25) | 0);
 
         // Check nearby threats via spatial hash
         const nearbyIds = this.spatialHash.query(head.x, head.y, 250);
@@ -390,20 +428,21 @@ export class WSClient {
         desiredY += (tDy - desiredY) * 0.06;
 
       } else if (mem.state === 'hunt' || mem.state === 'ambush') {
-        // Find nearest food (scan with stride for perf)
-        let nearestDistSq = Infinity;
-        let fdx = 0, fdy = 0;
-        const stride = this.botFoods.length > 400 ? 3 : 1;
-        for (let fi = 0; fi < this.botFoods.length; fi += stride) {
-          const f = this.botFoods[fi];
-          const dx = f.position.x - head.x;
-          const dy = f.position.y - head.y;
-          const dsq = dx*dx + dy*dy;
-          if (dsq < nearestDistSq) { nearestDistSq = dsq; fdx = dx; fdy = dy; }
+        // Find nearest food via spatial hash: O(1) average
+        if (this.foodHashDirty) {
+          this.foodHash.clear();
+          for (let fi = 0; fi < this.botFoods.length; fi++) {
+            const f = this.botFoods[fi];
+            this.foodHash.insert(f.position.x, f.position.y, fi);
+          }
+          this.foodHashDirty = false;
         }
-
-        if (nearestDistSq < Infinity) {
-          const fd = Math.sqrt(nearestDistSq) || 1;
+        const nearFoodIdx = this.foodHash.queryNearest(head.x, head.y, 600, this.botFoods);
+        if (nearFoodIdx >= 0) {
+          const nf = this.botFoods[nearFoodIdx];
+          const fdx = nf.position.x - head.x;
+          const fdy = nf.position.y - head.y;
+          const fd = Math.sqrt(fdx * fdx + fdy * fdy) || 1;
           const lerpT = mem.state === 'ambush'
             ? 0.13 + mem.aggression * 0.10
             : 0.07 + mem.aggression * 0.12;
@@ -444,7 +483,8 @@ export class WSClient {
       // ── Phase C: Safety steering (spatial hash body avoidance) ─
       const dangerR = 110 + radius * 2;
       const nearSegs = this.spatialHash.query(head.x, head.y, dangerR);
-      const seen = new Set<string>();
+      this._reusableSeenSet.clear();
+      const seen = this._reusableSeenSet;
       for (const tid of nearSegs) {
         if (tid === bot.id || seen.has(tid)) continue;
         seen.add(tid);
@@ -568,9 +608,10 @@ export class WSClient {
           this.botFoods[fi] = {
             id: `food_r_${now}_${fi}`,
             position: { x: 50 + Math.random()*(ws-100), y: 50 + Math.random()*(ws-100) },
-            color: colors[Math.floor(Math.random()*colors.length)],
-            size: Math.random()*4+4, value: Math.floor(Math.random()*3)+1,
+            color: colors[(Math.random()*colors.length)|0],
+            size: Math.random()*4+4, value: ((Math.random()*3)|0)+1,
           };
+          this.foodHashDirty = true;
           break;
         }
       }
@@ -600,9 +641,12 @@ export class WSClient {
     });
 
     // ── Process dead bots ─────────────────────────────────────
-    for (const id of deadIds) {
-      this.botMem.delete(id);
-      this.bots.delete(id);
+    if (deadIds.length > 0) {
+      for (const id of deadIds) {
+        this.botMem.delete(id);
+        this.bots.delete(id);
+      }
+      this.foodHashDirty = true;
     }
 
     // ── Process respawn queue ─────────────────────────────────
