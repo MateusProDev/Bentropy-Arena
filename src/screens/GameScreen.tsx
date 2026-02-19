@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { GameEngine } from '../engine/GameEngine';
@@ -31,6 +31,12 @@ export default function GameScreen() {
   const [playerRank, setPlayerRank] = useState<number | undefined>(undefined);
   const abilityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const firstStateRef = useRef(false);
+
+  // Throttle refs for state updates — avoid re-rendering at 60fps
+  const scoreRef = useRef(0);
+  const lengthRef = useRef(10);
+  const playerCountRef = useRef(0);
+  const hudUpdateTimerRef = useRef(0);
 
   // Force fullscreen on game start (both desktop and mobile)
   useEffect(() => {
@@ -110,7 +116,6 @@ export default function GameScreen() {
       Object.entries(payload.players).forEach(([id, p]) => {
         if (isOnline && id === localId) {
           // Online mode: only take server score/length if they're HIGHER than local
-          // This prevents server state from overwriting locally-eaten food (race condition)
           const localP = useGameStore.getState().localPlayer;
           if (localP) {
             const syncedScore = Math.max(localP.score, p.score);
@@ -119,8 +124,8 @@ export default function GameScreen() {
               score: syncedScore,
               length: syncedLength,
             });
-            setScore(syncedScore);
-            setLength(syncedLength);
+            scoreRef.current = syncedScore;
+            lengthRef.current = syncedLength;
           }
         } else {
           remoteMap.set(id, p);
@@ -133,8 +138,17 @@ export default function GameScreen() {
       if (payload.devilFruits) {
         useGameStore.getState().setDevilFruits(payload.devilFruits);
       }
-      setPlayerCount(isOnline ? totalCount : totalCount + 1);
-      setConnectionMode(isOnline ? 'online' : 'local');
+      playerCountRef.current = isOnline ? totalCount : totalCount + 1;
+
+      // Throttle React state updates to ~8fps (every 125ms) — avoid re-rendering at WS tick rate
+      const now = performance.now();
+      if (now - hudUpdateTimerRef.current > 125) {
+        hudUpdateTimerRef.current = now;
+        setScore(scoreRef.current);
+        setLength(lengthRef.current);
+        setPlayerCount(playerCountRef.current);
+        setConnectionMode(isOnline ? 'online' : 'local');
+      }
       engine.isOnlineMode = isOnline;
     };
 
@@ -201,10 +215,10 @@ export default function GameScreen() {
     };
 
     engine.onScoreUpdate = (newScore) => {
-      // Always update HUD when food is eaten (online or offline)
-      setScore(newScore);
+      // Update refs immediately — React state throttled via HUD timer
+      scoreRef.current = newScore;
       const lp = useGameStore.getState().localPlayer;
-      if (lp) setLength(lp.length);
+      if (lp) lengthRef.current = lp.length;
       useGameStore.getState().updateLocalPlayer({ score: newScore });
     };
 
@@ -382,37 +396,41 @@ export default function GameScreen() {
   }, []);
 
   const localPlayer = useGameStore((s) => s.localPlayer);
-  const remotePlayers = useGameStore((s) => s.players);
 
-  // Build live leaderboard from ALL players — ranked by LENGTH (universal top 10)
-  const leaderboard = useMemo(() => {
-    const entries: { name: string; score: number; length: number; color: string; isLocal: boolean }[] = [];
+  // Throttled leaderboard: only recompute ~4 times per second instead of every frame
+  const [leaderboard, setLeaderboard] = useState<{ name: string; score: number; length: number; color: string; isLocal: boolean }[]>([]);
 
-    // Add local player
-    if (localPlayer?.alive) {
-      entries.push({
-        name: localPlayer.name,
-        score: Math.floor(score),
-        length: Math.floor(localPlayer.length),
-        color: localPlayer.color,
-        isLocal: true,
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const state = useGameStore.getState();
+      const entries: { name: string; score: number; length: number; color: string; isLocal: boolean }[] = [];
+
+      if (state.localPlayer?.alive) {
+        entries.push({
+          name: state.localPlayer.name,
+          score: Math.floor(scoreRef.current),
+          length: Math.floor(state.localPlayer.length),
+          color: state.localPlayer.color,
+          isLocal: true,
+        });
+      }
+
+      state.players.forEach((p) => {
+        if (!p.alive) return;
+        entries.push({
+          name: p.name,
+          score: Math.floor(p.score),
+          length: Math.floor(p.length),
+          color: p.color,
+          isLocal: false,
+        });
       });
-    }
 
-    // Add remote/bot players
-    remotePlayers.forEach((p) => {
-      if (!p.alive) return;
-      entries.push({
-        name: p.name,
-        score: Math.floor(p.score),
-        length: Math.floor(p.length),
-        color: p.color,
-        isLocal: false,
-      });
-    });
+      setLeaderboard(entries.sort((a, b) => b.length - a.length));
+    }, 250); // 4fps leaderboard updates
 
-    return entries.sort((a, b) => b.length - a.length);
-  }, [localPlayer, remotePlayers, score]);
+    return () => clearInterval(interval);
+  }, [gameSession]);
 
   const handleBoostStart = useCallback(() => {
     engineRef.current?.setMobileBoosting(true);

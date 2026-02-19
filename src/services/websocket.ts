@@ -211,11 +211,17 @@ export class WSClient {
     this.generateFoods(DEFAULT_CONFIG.foodCount);
     this.generateDevilFruits(10);
 
-    // Simulation loop - 30fps
+    // Simulation loop - bot AI at 20fps, state broadcast at 15fps
+    let botTickCounter = 0;
     this.botInterval = setInterval(() => {
       this.updateBots();
-      this.emitFallbackState(joinPayload.playerId);
-    }, 1000 / 60);
+      // Broadcast state every 3rd bot tick (~6.67fps) — sufficient for smooth client interpolation
+      botTickCounter++;
+      if (botTickCounter >= 3) {
+        botTickCounter = 0;
+        this.emitFallbackState(joinPayload.playerId);
+      }
+    }, 1000 / 20);
   }
 
   // ── Bot memory map ────────────────────────────────────────
@@ -356,20 +362,21 @@ export class WSClient {
     const now = Date.now();
     const ws = DEFAULT_CONFIG.worldSize;
 
-    // ── Phase 0: Rebuild spatial hash ────────────────────────
+    // ── Phase 0: Rebuild spatial hash (always needed since snakes moved) ──
     this.spatialHash.clear();
+    // Only hash a limited number of segments per snake for performance
     this.bots.forEach((b) => {
       if (!b.alive) return;
-      const limit = Math.min(b.segments.length, 80);
-      for (let i = 1; i < limit; i++) {
+      const limit = Math.min(b.segments.length, 50);
+      for (let i = 1; i < limit; i += 2) {
         const s = b.segments[i];
         this.spatialHash.insert(s.x, s.y, b.id);
       }
     });
     // Also hash local player body
     if (this.localPlayerRef?.alive) {
-      const limit = Math.min(this.localPlayerRef.segments.length, 80);
-      for (let i = 1; i < limit; i++) {
+      const limit = Math.min(this.localPlayerRef.segments.length, 50);
+      for (let i = 1; i < limit; i += 2) {
         const s = this.localPlayerRef.segments[i];
         this.spatialHash.insert(s.x, s.y, '__player__');
       }
@@ -677,7 +684,8 @@ export class WSClient {
     }
 
     // ── Maintain stable TARGET_BOTS pool ─────────────────────
-    const alive = Array.from(this.bots.values()).filter(b => b.alive).length;
+    let alive = 0;
+    this.bots.forEach(b => { if (b.alive) alive++; });
     const pending = this.botRespawnQueue.length;
     const deficit = this.TARGET_BOTS - alive - pending;
     if (deficit > 0) {
@@ -691,20 +699,33 @@ export class WSClient {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
 
 
+  // Reusable state payload object to avoid allocations per tick
+  private _statePayload: {
+    players: Record<string, Player>;
+    foods: Food[];
+    devilFruits: DevilFruit[];
+    tick: number;
+  } = { players: {}, foods: [], devilFruits: [], tick: 0 };
+
   private emitFallbackState(_localPlayerId: string): void {
-    const players: Record<string, Player> = {};
+    // Reuse payload object, rebuild players record in-place
+    const payload = this._statePayload;
+    const players = payload.players;
+    // Clear old keys
+    for (const key in players) {
+      if (!this.bots.has(key)) delete players[key];
+    }
+    // Set current bots
     this.bots.forEach((bot, id) => {
       players[id] = bot;
     });
+    payload.foods = this.botFoods;
+    payload.devilFruits = this.botDevilFruits;
+    payload.tick = Date.now();
 
     this.emit('state', {
       type: 'state',
-      payload: {
-        players,
-        foods: this.botFoods,
-        devilFruits: this.botDevilFruits,
-        tick: Date.now(),
-      },
+      payload,
       timestamp: Date.now(),
     });
   }

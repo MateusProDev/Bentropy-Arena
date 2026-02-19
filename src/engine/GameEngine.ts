@@ -99,6 +99,13 @@ export class GameEngine {
   private deathFlash = 0;
   private killFeedEntries: { text: string; life: number }[] = [];
 
+  // ── Pre-allocated reusable buffers ────────────────────────
+  private _visSegsPool: { x: number; y: number; r: number }[] = [];
+  private _foodGlowMap = new Map<string, { x: number; y: number; s: number }[]>();
+  private _foodBodyMap = new Map<string, { x: number; y: number; s: number }[]>();
+  private _particleGroupMap = new Map<string, Particle[]>();
+  private _particleAlphaMap = new Map<number, Particle[]>();
+
   // Online mode
   public isOnlineMode = false;
 
@@ -332,9 +339,17 @@ export class GameEngine {
       this.boostTrail.push({ x: tail.x + (Math.random() - 0.5) * 8, y: tail.y + (Math.random() - 0.5) * 8, life: 1, color: boostColor });
       if (this.boostTrail.length > 60) this.boostTrail.shift();
     }
-    for (let i = this.boostTrail.length - 1; i >= 0; i--) {
-      this.boostTrail[i].life -= 0.05;
-      if (this.boostTrail[i].life <= 0) this.boostTrail.splice(i, 1);
+    // Swap-and-pop removal (O(n) instead of O(n²) splice)
+    {
+      let writeIdx = 0;
+      for (let i = 0; i < this.boostTrail.length; i++) {
+        this.boostTrail[i].life -= 0.05;
+        if (this.boostTrail[i].life > 0) {
+          if (writeIdx !== i) this.boostTrail[writeIdx] = this.boostTrail[i];
+          writeIdx++;
+        }
+      }
+      this.boostTrail.length = writeIdx;
     }
 
     // Ability auto-expire
@@ -344,10 +359,17 @@ export class GameEngine {
       this.onAbilityExpired?.();
     }
 
-    // Kill feed decay
-    for (let i = this.killFeedEntries.length - 1; i >= 0; i--) {
-      this.killFeedEntries[i].life -= 1 / 180;
-      if (this.killFeedEntries[i].life <= 0) this.killFeedEntries.splice(i, 1);
+    // Kill feed decay (swap-and-pop)
+    {
+      let writeIdx = 0;
+      for (let i = 0; i < this.killFeedEntries.length; i++) {
+        this.killFeedEntries[i].life -= 1 / 180;
+        if (this.killFeedEntries[i].life > 0) {
+          if (writeIdx !== i) this.killFeedEntries[writeIdx] = this.killFeedEntries[i];
+          writeIdx++;
+        }
+      }
+      this.killFeedEntries.length = writeIdx;
     }
 
     if (this.deathFlash > 0) this.deathFlash -= 0.04;
@@ -436,8 +458,16 @@ export class GameEngine {
     }
 
     if (eaten.length > 0) {
-      eaten.sort((a, b) => b - a);
-      for (const idx of eaten) this.foods.splice(idx, 1);
+      // Mark eaten foods as null, then compact the array (avoid multiple splices)
+      for (const idx of eaten) (this.foods as any)[idx] = null;
+      let writeIdx = 0;
+      for (let i = 0; i < this.foods.length; i++) {
+        if (this.foods[i] !== null) {
+          if (writeIdx !== i) this.foods[writeIdx] = this.foods[i];
+          writeIdx++;
+        }
+      }
+      this.foods.length = writeIdx;
       this.foodGridDirty = true;
     }
   }
@@ -636,9 +666,9 @@ export class GameEngine {
       const head = this.localPlayer.segments[0];
       if (head) {
         const moved = !this._glowCacheHead ||
-          Math.abs(head.x - this._glowCacheHead.x) > 60 ||
-          Math.abs(head.y - this._glowCacheHead.y) > 60 ||
-          this.frameCount % 10 === 0;
+          Math.abs(head.x - this._glowCacheHead.x) > 120 ||
+          Math.abs(head.y - this._glowCacheHead.y) > 120 ||
+          this.frameCount % 30 === 0;
         if (moved) {
           const glow = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 800);
           glow.addColorStop(0, 'rgba(16,185,129,0.04)');
@@ -726,9 +756,11 @@ export class GameEngine {
     const margin = 40;
     const t = this.frameCount;
 
-    type FoodBatch = { x: number; y: number; s: number }[];
-    const glow = new Map<string, FoodBatch>();
-    const body = new Map<string, FoodBatch>();
+    // Reuse pre-allocated maps (clear values, keep structure)
+    const glow = this._foodGlowMap;
+    const body = this._foodBodyMap;
+    glow.forEach(arr => { arr.length = 0; });
+    body.forEach(arr => { arr.length = 0; });
 
     for (let fi = 0; fi < this.foods.length; fi++) {
       const food = this.foods[fi];
@@ -740,9 +772,13 @@ export class GameEngine {
       const pulse = 1 + Math.sin(t * 0.04 + fx * 0.03 + fy * 0.02) * 0.13;
       const s = food.size * pulse;
 
-      if (!glow.has(food.color)) { glow.set(food.color, []); body.set(food.color, []); }
-      glow.get(food.color)!.push({ x: fx, y: fy, s: s * 2.2 });
-      body.get(food.color)!.push({ x: fx, y: fy, s });
+      let ga = glow.get(food.color);
+      if (!ga) { ga = []; glow.set(food.color, ga); }
+      ga.push({ x: fx, y: fy, s: s * 2.2 });
+
+      let ba = body.get(food.color);
+      if (!ba) { ba = []; body.set(food.color, ba); }
+      ba.push({ x: fx, y: fy, s });
     }
 
     // Glow halos — batched per color
@@ -822,14 +858,15 @@ export class GameEngine {
       }
       ctx.stroke();
 
-      // Fruit body with gradient
-      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
-      gradient.addColorStop(0, fruit.glowColor);
-      gradient.addColorStop(0.6, fruit.color);
-      gradient.addColorStop(1, fruit.color + '90');
-      ctx.fillStyle = gradient;
+      // Fruit body — simplified (no per-fruit gradient)
+      ctx.fillStyle = fruit.color;
       ctx.beginPath();
       ctx.arc(0, 0, size, 0, Math.PI * 2);
+      ctx.fill();
+      // Glow core
+      ctx.fillStyle = fruit.glowColor + '60';
+      ctx.beginPath();
+      ctx.arc(-size * 0.15, -size * 0.15, size * 0.5, 0, Math.PI * 2);
       ctx.fill();
 
       // Swirl pattern
@@ -886,8 +923,8 @@ export class GameEngine {
     const thicknessMult = this.getThicknessMult(len);
     const baseSize = segSize * thicknessMult;
 
-    // Shadow for remote snakes (limited segments)
-    if (!isLocal) {
+    // Shadow for remote snakes (limited segments) — skip every other frame for perf
+    if (!isLocal && (this.frameCount & 1) === 0) {
       const shadowOff = baseSize * 0.35;
       ctx.save();
       ctx.globalAlpha = 0.15;
@@ -931,32 +968,47 @@ export class GameEngine {
     const bodyColorDark = cachedDarken(bodyColor, 40);
     const strokeColor = abilityGlow ? cachedDarken(abilityGlow, 20) : bodyColorDark;
 
-    // Build visible segments with viewport culling + downsampling
+    // Build visible segments with viewport culling + downsampling — reuse pool
     const step = segments.length > 300 ? 3 : segments.length > 100 ? 2 : 1;
-    const visSegs: { x: number; y: number; r: number }[] = [];
+    const visSegs = this._visSegsPool;
+    let visCount = 0;
 
     for (let i = 0; i < segments.length; i += step) {
       const seg = segments[i];
       if (seg.x < camX - cullMargin || seg.x > camX + vw + cullMargin ||
           seg.y < camY - cullMargin || seg.y > camY + vh + cullMargin) {
-        if (visSegs.length > 0 && visSegs[visSegs.length - 1].r > 0) {
-          visSegs.push({ x: seg.x, y: seg.y, r: -1 });
+        if (visCount > 0 && visSegs[visCount - 1].r > 0) {
+          if (visCount >= visSegs.length) visSegs.push({ x: seg.x, y: seg.y, r: -1 });
+          else { visSegs[visCount].x = seg.x; visSegs[visCount].y = seg.y; visSegs[visCount].r = -1; }
+          visCount++;
         }
         continue;
       }
       const t = i / segments.length; // 0 at head, 1 at tail
-      // Uniform body with gentle taper only at tail tip (last 15%)
+      // slither.io style: thick near head, very gentle taper toward tail
       let radius: number;
-      if (t < 0.85) {
-        radius = baseSize; // uniform width like slither.io
+      if (t < 0.05) {
+        // Neck transition: match head size then ease into body
+        radius = baseSize * (1.1 - t * 2.0); // 1.1 → 1.0
+      } else if (t < 0.80) {
+        // Main body: uniform width
+        radius = baseSize;
       } else {
-        const tailT = (t - 0.85) / 0.15; // 0..1 over last 15%
-        radius = baseSize * (1 - tailT * 0.65); // taper to 35%
+        // Tail: smooth taper over last 20%
+        const tailT = (t - 0.80) / 0.20; // 0..1
+        radius = baseSize * (1 - tailT * 0.7); // taper to 30%
       }
-      visSegs.push({ x: seg.x, y: seg.y, r: radius });
+      if (visCount >= visSegs.length) visSegs.push({ x: seg.x, y: seg.y, r: radius });
+      else { visSegs[visCount].x = seg.x; visSegs[visCount].y = seg.y; visSegs[visCount].r = radius; }
+      visCount++;
     }
 
-    if (visSegs.length < 2) {
+    // Trim the pool to the used count for this snake
+    // (pool keeps its capacity for next frame to avoid re-allocations)
+    const usedVisSegs = visSegs;
+    // The drawSmoothSnakePath and renderBodyTheme use visCount to limit iteration
+
+    if (visCount < 2) {
       ctx.globalAlpha = 1;
       return;
     }
@@ -969,19 +1021,19 @@ export class GameEngine {
 
     // Layer 1: dark outline/border
     ctx.strokeStyle = strokeColor;
-    this.drawSmoothSnakePath(ctx, visSegs, 1.35);
+    this.drawSmoothSnakePath(ctx, usedVisSegs, visCount, 1.35);
 
     // Layer 2: main body color
     ctx.strokeStyle = bodyColor;
-    this.drawSmoothSnakePath(ctx, visSegs, 1.05);
+    this.drawSmoothSnakePath(ctx, usedVisSegs, visCount, 1.05);
 
     // Layer 3: body theme pattern (BELOW highlight, covers full body)
-    this.renderBodyTheme(ctx, player, visSegs, baseSize);
+    this.renderBodyTheme(ctx, player, usedVisSegs, visCount, baseSize);
 
     // Layer 4: belly scales pattern (alternating lighter bands)
     const patternLight = cachedLighten(bodyColor, 18);
-    for (let si = 0; si < visSegs.length - 1; si += 3) {
-      const s = visSegs[si];
+    for (let si = 0; si < visCount - 1; si += 3) {
+      const s = usedVisSegs[si];
       if (s.r < 0) continue;
       const r = s.r * 0.38;
       if (r < 1.5) continue;
@@ -993,7 +1045,7 @@ export class GameEngine {
 
     // Layer 5: specular highlight strip (top-center shine)
     ctx.strokeStyle = bodyColorLight + '90';
-    this.drawSmoothSnakePath(ctx, visSegs, 0.25);
+    this.drawSmoothSnakePath(ctx, usedVisSegs, visCount, 0.25);
 
     ctx.restore();
 
@@ -1001,11 +1053,18 @@ export class GameEngine {
     const head = segments[0];
     const headSize = baseSize * 1.1; // just slightly bigger than body
 
-    // Head glow
+    // Head glow — cheap double-circle instead of expensive shadowBlur
     const glowActive = isLocal || player.boosting || abilityGlow;
     if (glowActive) {
-      ctx.shadowColor = abilityGlow || color;
-      ctx.shadowBlur = 16;
+      const glowColor = abilityGlow || color;
+      ctx.fillStyle = glowColor + '18';
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, headSize * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = glowColor + '0c';
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, headSize * 3.0, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Snout-like shape: elongated ellipse in movement direction
@@ -1016,27 +1075,26 @@ export class GameEngine {
     ctx.translate(head.x, head.y);
     ctx.rotate(headAngle);
 
-    // Head gradient
-    const headLightColor = cachedLighten(bodyColor, 55);
-    const headGrad = ctx.createRadialGradient(
-      -headSize * 0.15, -headSize * 0.15, headSize * 0.08,
-      0, 0, headSize * 1.1
-    );
-    headGrad.addColorStop(0, headLightColor);
-    headGrad.addColorStop(0.45, bodyColor);
-    headGrad.addColorStop(1, bodyColorDark);
-    ctx.fillStyle = headGrad;
+    // Head gradient — simplified to avoid per-frame createRadialGradient
+    ctx.fillStyle = bodyColor;
 
     // Perfect circle head (slither.io / wormate.io style)
     ctx.beginPath();
     ctx.arc(0, 0, headSize, 0, Math.PI * 2);
     ctx.fill();
 
+    // Head highlight (cheap circle instead of gradient)
+    ctx.fillStyle = bodyColorLight + '55';
+    ctx.beginPath();
+    ctx.arc(-headSize * 0.2, -headSize * 0.2, headSize * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
     // Border stroke
     ctx.strokeStyle = strokeColor;
     ctx.lineWidth = Math.max(1.2, headSize * 0.1);
+    ctx.beginPath();
+    ctx.arc(0, 0, headSize, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.shadowBlur = 0;
 
     // Eyes — big round, wormate.io style
     const eyeFwd = headSize * 0.30;
@@ -1044,14 +1102,11 @@ export class GameEngine {
     const eyeR = headSize * 0.30;
     const pupilR = headSize * 0.18;
 
-    // Eye whites with subtle gradient
+    // Eye whites with simple fill (avoids per-eye gradient creation)
     for (const side of [-1, 1]) {
       const ey = eyeSep * side;
       // White
-      const eyeGrad = ctx.createRadialGradient(eyeFwd - eyeR * 0.15, ey - eyeR * 0.15, eyeR * 0.1, eyeFwd, ey, eyeR);
-      eyeGrad.addColorStop(0, '#ffffff');
-      eyeGrad.addColorStop(1, '#e0e0e8');
-      ctx.fillStyle = eyeGrad;
+      ctx.fillStyle = '#f0f0f4';
       ctx.beginPath();
       ctx.arc(eyeFwd, ey, eyeR, 0, Math.PI * 2);
       ctx.fill();
@@ -1155,9 +1210,10 @@ export class GameEngine {
   private drawSmoothSnakePath(
     ctx: CanvasRenderingContext2D,
     segs: { x: number; y: number; r: number }[],
+    segCount: number,
     widthScale: number
   ): void {
-    if (segs.length < 2) return;
+    if (segCount < 2) return;
 
     const TOLERANCE = 1;
     let runStart = 0;
@@ -1182,7 +1238,7 @@ export class GameEngine {
       ctx.stroke();
     };
 
-    for (let i = 1; i < segs.length; i++) {
+    for (let i = 1; i < segCount; i++) {
       const s = segs[i];
       if (s.r < 0) {
         flushRun(i - 1);
@@ -1195,7 +1251,7 @@ export class GameEngine {
         runStart = i - 1;
       }
     }
-    flushRun(segs.length - 1);
+    flushRun(segCount - 1);
   }
 
   private renderPlayerName(ctx: CanvasRenderingContext2D, player: Player): void {
@@ -1223,7 +1279,7 @@ export class GameEngine {
 
     ctx.font = `${scoreFontSize}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = player.color;
-    ctx.fillText(`🐍 ${Math.floor(player.length)}`, head.x, y - nameFontSize - 2);
+    ctx.fillText(`L:${Math.floor(player.length)}`, head.x, y - nameFontSize - 2);
 
     if (player.activeAbility) {
       ctx.font = `${Math.round(9 * fontScale)}px Inter, system-ui, sans-serif`;
@@ -1674,11 +1730,12 @@ export class GameEngine {
     ctx: CanvasRenderingContext2D,
     player: Player,
     visSegs: { x: number; y: number; r: number }[],
+    visCount: number,
     baseSize: number
   ): void {
     const theme = player.theme;
     if (!theme || theme === 'none') return;
-    if (visSegs.length < 3) return;
+    if (visCount < 3) return;
 
     const color = player.color;
     const fc = this.frameCount;
@@ -1688,7 +1745,7 @@ export class GameEngine {
         // Dark & light alternating rings across entire body
         const stripeDark = cachedDarken(color, 50) + '80';
         const stripeLight = cachedLighten(color, 25) + '40';
-        for (let i = 0; i < visSegs.length; i++) {
+        for (let i = 0; i < visCount; i++) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const phase = i % 6;
@@ -1712,10 +1769,10 @@ export class GameEngine {
         for (const sideSign of [-1, 1]) {
           ctx.beginPath();
           let started = false;
-          for (let i = 0; i < visSegs.length; i++) {
+          for (let i = 0; i < visCount; i++) {
             const s = visSegs[i];
             if (s.r < 0) { started = false; continue; }
-            const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+            const n = i < visCount - 1 ? visSegs[i + 1] : s;
             if (n.r < 0) continue;
             const dx = n.x - s.x;
             const dy = n.y - s.y;
@@ -1737,10 +1794,10 @@ export class GameEngine {
         // Polka dots all along both sides of body
         const dotColor1 = cachedLighten(color, 55) + '65';
         const dotColor2 = cachedDarken(color, 30) + '55';
-        for (let i = 1; i < visSegs.length; i += 2) {
+        for (let i = 1; i < visCount; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -1769,7 +1826,7 @@ export class GameEngine {
         // Cosmic nebula glow covering entire body + sparkling stars
         const nebulaColors = ['#6633cc', '#3366ff', '#cc33ff', '#3399ff'];
         // Nebula haze along body
-        for (let i = 0; i < visSegs.length; i += 2) {
+        for (let i = 0; i < visCount; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const ci = ((i * 3 + 7) % nebulaColors.length);
@@ -1783,7 +1840,7 @@ export class GameEngine {
         }
         // Sparkling stars
         const starColors = ['#ffffff', '#ffddaa', '#aaddff', '#ffaaff'];
-        for (let i = 0; i < visSegs.length; i++) {
+        for (let i = 0; i < visCount; i++) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const seed = (i * 7 + fc) % 40;
@@ -1802,11 +1859,11 @@ export class GameEngine {
       }
       case 'flames': {
         // Fire gradient covering entire body from head to tail
-        for (let i = 0; i < visSegs.length; i++) {
+        for (let i = 0; i < visCount; i++) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const t = i / visSegs.length; // 0 head → 1 tail
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const t = i / visCount; // 0 head → 1 tail
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -1840,10 +1897,10 @@ export class GameEngine {
           ctx.lineWidth = baseSize * 0.09;
           ctx.beginPath();
           let boltStarted = false;
-          for (let i = 0; i < visSegs.length; i++) {
+          for (let i = 0; i < visCount; i++) {
             const s = visSegs[i];
             if (s.r < 0) { boltStarted = false; continue; }
-            const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+            const n = i < visCount - 1 ? visSegs[i + 1] : s;
             if (n.r < 0) continue;
             const dx = n.x - s.x;
             const dy = n.y - s.y;
@@ -1863,11 +1920,11 @@ export class GameEngine {
         ctx.lineWidth = baseSize * 0.05;
         ctx.beginPath();
         let cs = false;
-        for (let i = 0; i < visSegs.length; i += 2) {
+        for (let i = 0; i < visCount; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) { cs = false; continue; }
           const jitter = Math.sin(fc * 0.4 + i * 2.1) * s.r * 0.2;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -1883,7 +1940,7 @@ export class GameEngine {
       }
       case 'sakura': {
         // Cherry blossom petals scattered all along body
-        for (let i = 2; i < visSegs.length; i += 3) {
+        for (let i = 2; i < visCount; i += 3) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const pr = s.r * 0.32;
@@ -1908,7 +1965,7 @@ export class GameEngine {
         }
         // Falling petal particles along body
         ctx.fillStyle = 'rgba(255,192,203,0.3)';
-        for (let i = 0; i < visSegs.length; i += 5) {
+        for (let i = 0; i < visCount; i += 5) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const petalR = s.r * 0.15;
@@ -1925,10 +1982,10 @@ export class GameEngine {
         // Overlapping dragon scales covering entire body
         const scaleStroke = cachedDarken(color, 30) + '70';
         const scaleFill = cachedDarken(color, 15) + '30';
-        for (let i = 1; i < visSegs.length; i++) {
+        for (let i = 1; i < visCount; i++) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -1946,10 +2003,10 @@ export class GameEngine {
         }
         // Lighter scale highlights on alternating
         const scaleHighlight = cachedLighten(color, 20) + '25';
-        for (let i = 2; i < visSegs.length; i += 2) {
+        for (let i = 2; i < visCount; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -1972,18 +2029,18 @@ export class GameEngine {
         // Outer neon glow
         ctx.strokeStyle = neonColor;
         ctx.globalAlpha = pulse * 0.55;
-        this.drawSmoothSnakePath(ctx, visSegs, 1.25);
+        this.drawSmoothSnakePath(ctx, visSegs, visCount, 1.25);
         // Inner bright line
         ctx.strokeStyle = '#ffffff';
         ctx.globalAlpha = pulse * 0.35;
-        this.drawSmoothSnakePath(ctx, visSegs, 0.18);
+        this.drawSmoothSnakePath(ctx, visSegs, visCount, 0.18);
         // Neon dots along body edges
         ctx.fillStyle = neonColor;
         ctx.globalAlpha = pulse * 0.5;
-        for (let i = 0; i < visSegs.length; i += 4) {
+        for (let i = 0; i < visCount; i += 4) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          const n = i < visCount - 1 ? visSegs[i + 1] : s;
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
@@ -2006,7 +2063,7 @@ export class GameEngine {
         const camo2 = cachedDarken(color, 20) + '50';
         const camo3 = cachedLighten(color, 15) + '45';
         const camoColors = [camo1, camo2, camo3];
-        for (let i = 0; i < visSegs.length; i += 2) {
+        for (let i = 0; i < visCount; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const ci = ((i * 7 + 3) % camoColors.length);
@@ -2079,19 +2136,20 @@ export class GameEngine {
       ctx.fill();
     });
 
-    // Local player blip
+    // Local player blip — cheap glow via double circle (no shadowBlur)
     if (this.localPlayer?.alive && this.localPlayer.segments[0]) {
       const dotR = Math.min(3 + this.localPlayer.length * 0.02, isMobile ? 5 : 7);
       const hx = mmX + this.localPlayer.segments[0].x * scale;
       const hy = mmY + this.localPlayer.segments[0].y * scale;
+      ctx.fillStyle = '#ffffff30';
+      ctx.beginPath();
+      ctx.arc(hx, hy, dotR * 2, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = this.localPlayer.color;
-      ctx.shadowColor = '#fff';
-      ctx.shadowBlur = 6;
       ctx.beginPath();
       ctx.arc(hx, hy, dotR, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.shadowBlur = 0;
       ctx.beginPath();
       ctx.arc(hx, hy, dotR * 0.45, 0, Math.PI * 2);
       ctx.fill();
@@ -2198,7 +2256,8 @@ export class GameEngine {
   }
 
   private updateParticles(): void {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
+    let writeIdx = 0;
+    for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
       p.x += p.vx;
       p.y += p.vy;
@@ -2206,24 +2265,33 @@ export class GameEngine {
       p.vy *= 0.98;
       p.life -= p.decay;
       p.size *= 0.99;
-      if (p.life <= 0) this.particles.splice(i, 1);
+      if (p.life > 0) {
+        if (writeIdx !== i) this.particles[writeIdx] = this.particles[i];
+        writeIdx++;
+      }
     }
+    this.particles.length = writeIdx;
   }
 
-  // Batch-render particles grouped by color + quantized alpha
+  // Batch-render particles grouped by color + quantized alpha (reuse maps)
   private renderParticles(ctx: CanvasRenderingContext2D): void {
     if (this.particles.length === 0) return;
 
-    const groups = new Map<string, Particle[]>();
+    const groups = this._particleGroupMap;
+    groups.forEach(arr => { arr.length = 0; });
+
     for (const p of this.particles) {
       let g = groups.get(p.color);
       if (!g) { g = []; groups.set(p.color, g); }
       g.push(p);
     }
 
+    const alphaGroups = this._particleAlphaMap;
+
     groups.forEach((parts, color) => {
+      if (parts.length === 0) return;
       ctx.fillStyle = color;
-      const alphaGroups = new Map<number, Particle[]>();
+      alphaGroups.forEach(arr => { arr.length = 0; });
       for (const p of parts) {
         const aKey = Math.round(p.life * 10);
         let ag = alphaGroups.get(aKey);
@@ -2231,6 +2299,7 @@ export class GameEngine {
         ag.push(p);
       }
       alphaGroups.forEach((ps, aKey) => {
+        if (ps.length === 0) return;
         ctx.globalAlpha = aKey / 10;
         ctx.beginPath();
         for (const p of ps) {
