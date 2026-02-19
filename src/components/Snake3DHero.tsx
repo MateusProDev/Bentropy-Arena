@@ -1,34 +1,23 @@
-import { useEffect, useRef, useCallback } from 'react';
+﻿import { useEffect, useRef, useCallback } from 'react';
 
-// ─── Helpers ───────────────────────────────────────────────────────
+// Helpers
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function clamp(v: number, lo: number, hi: number) { return v < lo ? lo : v > hi ? hi : v; }
+function hsl(h: number, s: number, l: number, a = 1) { return `hsla(${h % 360},${s}%,${l}%,${a})`; }
+function seededRandom(seed: number): number { const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
-interface Vec3 { x: number; y: number; z: number; }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; size: number; hue: number; }
+interface FloatingScore { x: number; y: number; text: string; life: number; maxLife: number; color: string; vx: number; vy: number; scale: number; }
+interface Crystal { x: number; y: number; size: number; hue: number; phase: number; pts: number; }
+interface Coin { x: number; y: number; size: number; phase: number; speed: number; }
 
-function hsl(h: number, s: number, l: number, a = 1) {
-  return `hsla(${h % 360},${s}%,${l}%,${a})`;
-}
-
-// Soft noise for organic movement
-function noise(t: number, seed = 0): number {
-  return Math.sin(t * 1.3 + seed) * 0.5
-    + Math.sin(t * 2.7 + seed * 2.1) * 0.25
-    + Math.sin(t * 0.8 + seed * 0.7) * 0.25;
-}
-
-// 3D → screen projection (perspective)
-function project(p: Vec3, cx: number, cy: number, fov: number): { sx: number; sy: number; scale: number } {
-  const d = fov / (fov + p.z);
-  return { sx: cx + p.x * d, sy: cy + p.y * d, scale: d };
-}
-
-// ─── Snake3DHero ───────────────────────────────────────────────────
 export default function Snake3DHero() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
   const timeRef = useRef(0);
-  const mouseRef = useRef({ x: 0.5, y: 0.5 });
+  const stateRef = useRef<{
+    particles: Particle[]; scores: FloatingScore[]; crystals: Crystal[]; coins: Coin[]; init: boolean;
+  }>({ particles: [], scores: [], crystals: [], coins: [], init: false });
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -38,436 +27,327 @@ export default function Snake3DHero() {
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
-    const W = rect.width;
-    const H = rect.height;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
+    const W = rect.width; const H = rect.height;
+    canvas.width = W * dpr; canvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const cx = W / 2;
-    const cy = H / 2;
-    const FOV = Math.min(W, H) * 1.1;
     const t = timeRef.current;
-    const mx = mouseRef.current.x;
-    const my = mouseRef.current.y;
+    const state = stateRef.current;
+    const S = Math.min(W, H);
 
-    ctx.clearRect(0, 0, W, H);
+    // Init persistent objects once
+    if (!state.init) {
+      for (let i = 0; i < 8; i++) {
+        state.crystals.push({
+          x: seededRandom(i * 7 + 1) * W, y: seededRandom(i * 7 + 2) * H,
+          size: S * (0.03 + seededRandom(i * 7 + 3) * 0.04),
+          hue: 260 + seededRandom(i * 7 + 4) * 40,
+          phase: seededRandom(i * 7 + 5) * Math.PI * 2,
+          pts: 4 + Math.floor(seededRandom(i * 7 + 6) * 3),
+        });
+      }
+      for (let i = 0; i < 12; i++) {
+        state.coins.push({
+          x: seededRandom(i * 11 + 50) * W, y: seededRandom(i * 11 + 51) * H,
+          size: S * (0.015 + seededRandom(i * 11 + 52) * 0.012),
+          phase: seededRandom(i * 11 + 53) * Math.PI * 2,
+          speed: 0.5 + seededRandom(i * 11 + 54) * 1.5,
+        });
+      }
+      state.init = true;
+    }
 
-    // ─── Build spine ─────────────────────────────────────────
-    const SEGS = 120;
-    const spine: Vec3[] = [];
-    const segLen = Math.min(W, H) * 0.025;
-
-    // Head target influenced by mouse
-    const headTargetX = (mx - 0.5) * W * 0.45;
-    const headTargetY = (my - 0.5) * H * 0.35;
-
-    for (let i = 0; i < SEGS; i++) {
-      const frac = i / SEGS;
-      const delay = frac * 3.5;
-      const tt = t - delay;
-
-      // Organic sinusoidal path with mouse influence
-      const influence = Math.max(0, 1 - frac * 1.8);
-      const xBase = noise(tt * 0.7, 0) * W * 0.32;
-      const yBase = noise(tt * 0.55, 100) * H * 0.25;
-      const zBase = noise(tt * 0.4, 200) * 180 + Math.sin(tt * 0.3 + frac * 4) * 80;
-
-      spine.push({
-        x: lerp(xBase, headTargetX, influence * 0.4),
-        y: lerp(yBase, headTargetY, influence * 0.35),
-        z: zBase + frac * 40,
+    // Spawn spark particles
+    if (Math.random() < 0.4) {
+      state.particles.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 1.5, vy: -Math.random() * 2 - 0.5,
+        life: 0, maxLife: 40 + Math.random() * 60,
+        size: S * (0.003 + Math.random() * 0.005),
+        hue: [30, 50, 180, 280, 340][Math.floor(Math.random() * 5)],
+      });
+    }
+    // Spawn floating score
+    if (Math.random() < 0.012) {
+      const texts = ['+100', '+200', '+300', '+450', '+500', '+750', '+1000'];
+      const colors = ['#ffdd44', '#44ff88', '#44ddff', '#ff6644', '#ff44cc', '#88ff44'];
+      state.scores.push({
+        x: W * 0.1 + Math.random() * W * 0.8, y: H * 0.15 + Math.random() * H * 0.55,
+        text: texts[Math.floor(Math.random() * texts.length)],
+        life: 0, maxLife: 90,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        vx: (Math.random() - 0.5) * 0.8, vy: -1.2 - Math.random() * 0.8,
+        scale: 0.7 + Math.random() * 0.6,
       });
     }
 
-    // ─── Compute per-segment data ────────────────────────────
-    const segData: {
-      pos: Vec3;
-      sx: number; sy: number; scale: number;
-      radius: number;
-      nx: number; ny: number; // perpendicular normal (screen)
-    }[] = [];
+    // === BACKGROUND ===
+    const bgGrad = ctx.createRadialGradient(W / 2, H * 0.45, S * 0.1, W / 2, H / 2, S * 0.9);
+    bgGrad.addColorStop(0, '#1a0a2e'); bgGrad.addColorStop(0.4, '#0d0d2b');
+    bgGrad.addColorStop(0.7, '#060618'); bgGrad.addColorStop(1, '#020208');
+    ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
-    for (let i = 0; i < SEGS; i++) {
-      const p = spine[i];
-      const { sx, sy, scale } = project(p, cx, cy, FOV);
+    // Grid
+    ctx.save(); ctx.globalAlpha = 0.06; ctx.strokeStyle = '#6644ff'; ctx.lineWidth = 1;
+    const gs = S * 0.06;
+    for (let gx = 0; gx < W + gs; gx += gs) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
+    for (let gy = 0; gy < H + gs; gy += gs) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
+    ctx.restore();
 
-      // Body thickness: thicker in front, tapers to tail
-      let thick: number;
-      const frac = i / SEGS;
-      if (frac < 0.05) {
-        // Head ramp-up
-        thick = lerp(0.75, 1.0, frac / 0.05);
-      } else if (frac < 0.15) {
-        thick = 1.0;
-      } else {
-        thick = lerp(1.0, 0.15, (frac - 0.15) / 0.85);
-      }
-      const baseR = segLen * 0.82;
-      const radius = baseR * thick * scale;
-
-      // Screen-space normal perpendicular to path
-      let nx = 0; let ny = -1;
-      if (i < SEGS - 1) {
-        const next = project(spine[i + 1], cx, cy, FOV);
-        const dx = next.sx - sx;
-        const dy = next.sy - sy;
-        const len = Math.sqrt(dx * dx + dy * dy) || 1;
-        nx = -dy / len;
-        ny = dx / len;
-      } else if (segData.length > 0) {
-        nx = segData[segData.length - 1].nx;
-        ny = segData[segData.length - 1].ny;
-      }
-
-      segData.push({ pos: p, sx, sy, scale, radius, nx, ny });
-    }
-
-    // Sort by depth (back-to-front)
-    const indices = Array.from({ length: SEGS }, (_, i) => i);
-    indices.sort((a, b) => segData[b].pos.z - segData[a].pos.z);
-
-    // ─── Light direction (from upper-left-front) ─────────────
-    const lightDir = { x: -0.45, y: -0.6, z: -0.65 };
-    const lLen = Math.sqrt(lightDir.x ** 2 + lightDir.y ** 2 + lightDir.z ** 2);
-    lightDir.x /= lLen; lightDir.y /= lLen; lightDir.z /= lLen;
-
-    // ─── Ambient particles (floating orbs behind snake) ──────
-    const particleCount = 35;
-    for (let pi = 0; pi < particleCount; pi++) {
-      const seed = pi * 137.508;
-      const px = noise(t * 0.2 + seed, seed) * W * 0.5;
-      const py = noise(t * 0.18 + seed * 0.7, seed + 50) * H * 0.4;
-      const pz = 200 + noise(t * 0.15 + seed, seed + 100) * 150;
-      const proj = project({ x: px, y: py, z: pz }, cx, cy, FOV);
-      const pr = (2 + Math.sin(t * 0.5 + seed) * 1.5) * proj.scale;
-      if (pr < 0.3) continue;
-      const alpha = clamp(0.15 + Math.sin(t * 0.8 + seed * 2) * 0.12, 0.03, 0.3);
-      const hue = (120 + pi * 12 + t * 15) % 360;
-      ctx.fillStyle = hsl(hue, 80, 65, alpha);
+    // Crystals
+    for (const cr of state.crystals) {
+      const bob = Math.sin(t * 1.2 + cr.phase) * S * 0.008;
+      const glow = 0.4 + Math.sin(t * 1.5 + cr.phase) * 0.2;
+      ctx.save(); ctx.shadowColor = hsl(cr.hue, 100, 60, 0.8); ctx.shadowBlur = cr.size * 2;
+      ctx.fillStyle = hsl(cr.hue, 80, 50, glow);
       ctx.beginPath();
-      ctx.arc(proj.sx, proj.sy, pr, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // ─── Render body segments (back-to-front) ────────────────
-    const HUE_BASE = 152; // emerald base
-    const HUE_RANGE = 30;
-
-    for (const idx of indices) {
-      const seg = segData[idx];
-      if (seg.radius < 0.5) continue;
-
-      const frac = idx / SEGS;
-      const r = seg.radius;
-
-      // ── Shadow beneath each segment ──
-      const shadowOff = r * 0.3;
-      ctx.fillStyle = `rgba(0,0,0,${0.12 * seg.scale})`;
-      ctx.beginPath();
-      ctx.ellipse(seg.sx + shadowOff, seg.sy + shadowOff * 1.5, r * 1.1, r * 0.55, 0.3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // ── 3D sphere-like gradient per segment ──
-      // Calculate local normal for lighting
-      const zNorm = clamp(-seg.pos.z / 300, -1, 1);
-      const dotL = clamp(
-        seg.nx * lightDir.x + seg.ny * lightDir.y + zNorm * lightDir.z,
-        -1, 1
-      );
-      const lit = clamp(dotL * 0.5 + 0.5, 0.15, 1.0);
-
-      const hue = HUE_BASE + Math.sin(frac * Math.PI * 2 + t * 0.3) * HUE_RANGE;
-      const sat = 65 + lit * 20;
-      const baseLightness = 28 + lit * 32;
-
-      // Radial gradient for 3D spherical look
-      const grd = ctx.createRadialGradient(
-        seg.sx - r * 0.3, seg.sy - r * 0.35, r * 0.08,
-        seg.sx, seg.sy, r
-      );
-      grd.addColorStop(0, hsl(hue, sat + 15, baseLightness + 28, 0.98));
-      grd.addColorStop(0.45, hsl(hue, sat, baseLightness, 0.95));
-      grd.addColorStop(0.8, hsl(hue, sat - 10, baseLightness - 12, 0.92));
-      grd.addColorStop(1, hsl(hue, sat - 15, baseLightness - 20, 0.85));
-
-      ctx.fillStyle = grd;
-      ctx.beginPath();
-      ctx.arc(seg.sx, seg.sy, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      // ── Scale pattern overlay (diamond shape per segment) ──
-      if (r > 4 && idx % 2 === 0) {
-        const scaleAlpha = clamp(0.12 + lit * 0.1, 0.05, 0.25);
-        const sR = r * 0.7;
-        ctx.save();
-        ctx.translate(seg.sx, seg.sy);
-        // Rotate scale to align with body direction
-        const angle = Math.atan2(seg.ny, seg.nx) + Math.PI / 2;
-        ctx.rotate(angle);
-
-        // Diamond scale shape
-        ctx.fillStyle = hsl(hue + 10, sat + 10, baseLightness + 15, scaleAlpha);
-        ctx.beginPath();
-        ctx.moveTo(0, -sR * 0.85);
-        ctx.quadraticCurveTo(sR * 0.45, 0, 0, sR * 0.85);
-        ctx.quadraticCurveTo(-sR * 0.45, 0, 0, -sR * 0.85);
-        ctx.fill();
-
-        // Scale edge highlight
-        ctx.strokeStyle = hsl(hue, sat, baseLightness + 25, scaleAlpha * 0.8);
-        ctx.lineWidth = 0.6;
-        ctx.beginPath();
-        ctx.arc(0, 0, sR * 0.55, -Math.PI * 0.4, Math.PI * 0.4);
-        ctx.stroke();
-
-        ctx.restore();
+      for (let p = 0; p < cr.pts; p++) {
+        const a = (p / cr.pts) * Math.PI * 2 - Math.PI / 2;
+        const r = (p % 2 === 0) ? cr.size : cr.size * 0.55;
+        const px = cr.x + Math.cos(a) * r; const py = cr.y + bob + Math.sin(a) * r;
+        if (p === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
-
-      // ── Specular highlight (top-left bright spot) ──
-      if (r > 3) {
-        const specIntensity = Math.pow(clamp(dotL, 0, 1), 3) * 0.6;
-        if (specIntensity > 0.02) {
-          const specGrd = ctx.createRadialGradient(
-            seg.sx - r * 0.28, seg.sy - r * 0.32, 0,
-            seg.sx - r * 0.28, seg.sy - r * 0.32, r * 0.55
-          );
-          specGrd.addColorStop(0, `rgba(255,255,255,${specIntensity})`);
-          specGrd.addColorStop(1, 'rgba(255,255,255,0)');
-          ctx.fillStyle = specGrd;
-          ctx.beginPath();
-          ctx.arc(seg.sx, seg.sy, r, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // ── Rim light (edge glow opposite to light) ──
-      if (r > 3) {
-        const rimIntensity = clamp((1 - dotL) * 0.35, 0, 0.35);
-        if (rimIntensity > 0.02) {
-          ctx.strokeStyle = hsl(180, 90, 75, rimIntensity);
-          ctx.lineWidth = r * 0.12;
-          ctx.beginPath();
-          ctx.arc(seg.sx, seg.sy, r * 0.92, Math.PI * 0.6, Math.PI * 1.4);
-          ctx.stroke();
-        }
-      }
-    }
-
-    // ─── Head features (always draw on top) ──────────────────
-    const head = segData[0];
-    const hr = head.radius;
-    if (hr > 2) {
-      // ── Brow ridge ──
-      const browAngle = Math.atan2(head.ny, head.nx);
-      ctx.save();
-      ctx.translate(head.sx, head.sy);
-      ctx.rotate(browAngle + Math.PI / 2);
-
-      ctx.fillStyle = hsl(HUE_BASE, 50, 22, 0.5);
-      ctx.beginPath();
-      ctx.ellipse(hr * 0.15, 0, hr * 0.65, hr * 0.18, 0, Math.PI, 0);
-      ctx.fill();
+      ctx.closePath(); ctx.fill();
+      const ig = ctx.createRadialGradient(cr.x, cr.y + bob, 0, cr.x, cr.y + bob, cr.size * 0.5);
+      ig.addColorStop(0, hsl(cr.hue, 100, 85, 0.7)); ig.addColorStop(1, hsl(cr.hue, 100, 60, 0));
+      ctx.fillStyle = ig; ctx.beginPath(); ctx.arc(cr.x, cr.y + bob, cr.size * 0.5, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-
-      // ── Eyes (3D with reflection) ──
-      const eyeSep = hr * 0.42;
-      const eyeFwd = hr * 0.35;
-
-      for (const side of [-1, 1]) {
-        const ex = head.sx + head.nx * eyeSep * side + (segData[1] ? (head.sx - segData[1].sx) : 0) * 0.3;
-        const ey = head.sy + head.ny * eyeSep * side + (segData[1] ? (head.sy - segData[1].sy) : 0) * 0.3;
-        // Move forward along direction
-        const fwdX = -head.ny;
-        const fwdY = head.nx;
-        const ecx = ex + fwdX * eyeFwd;
-        const ecy = ey + fwdY * eyeFwd;
-        const er = hr * 0.22;
-
-        // Eye white with gradient
-        const eyeGrd = ctx.createRadialGradient(
-          ecx - er * 0.2, ecy - er * 0.25, er * 0.1,
-          ecx, ecy, er
-        );
-        eyeGrd.addColorStop(0, '#ffffee');
-        eyeGrd.addColorStop(0.7, '#e8e8d0');
-        eyeGrd.addColorStop(1, '#c8c8a0');
-        ctx.fillStyle = eyeGrd;
-        ctx.beginPath();
-        ctx.arc(ecx, ecy, er, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Iris (animated look direction)
-        const lookX = (mx - 0.5) * 0.25;
-        const lookY = (my - 0.5) * 0.2;
-        const ir = er * 0.65;
-        const irisGrd = ctx.createRadialGradient(
-          ecx + lookX * er, ecy + lookY * er, ir * 0.15,
-          ecx + lookX * er, ecy + lookY * er, ir
-        );
-        irisGrd.addColorStop(0, '#ffcc00');
-        irisGrd.addColorStop(0.4, '#ff8800');
-        irisGrd.addColorStop(0.85, '#cc4400');
-        irisGrd.addColorStop(1, '#661100');
-        ctx.fillStyle = irisGrd;
-        ctx.beginPath();
-        ctx.arc(ecx + lookX * er, ecy + lookY * er, ir, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Slit pupil
-        ctx.fillStyle = '#000';
-        ctx.save();
-        ctx.translate(ecx + lookX * er, ecy + lookY * er);
-        const slitAngle = Math.atan2(head.ny, head.nx);
-        ctx.rotate(slitAngle);
-        ctx.beginPath();
-        ctx.ellipse(0, 0, ir * 0.18, ir * 0.82, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-
-        // Eye specular reflection
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.beginPath();
-        ctx.arc(ecx - er * 0.22, ecy - er * 0.25, er * 0.18, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.beginPath();
-        ctx.arc(ecx + er * 0.15, ecy + er * 0.15, er * 0.09, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Eye outline
-        ctx.strokeStyle = hsl(HUE_BASE, 40, 18, 0.6);
-        ctx.lineWidth = er * 0.12;
-        ctx.beginPath();
-        ctx.arc(ecx, ecy, er, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // ── Forked tongue ──
-      const tonguePhase = (Math.sin(t * 4) * 0.5 + 0.5); // 0-1 flick
-      if (tonguePhase > 0.3) {
-        const tLen = hr * (0.6 + tonguePhase * 0.8);
-        const fwdX2 = -head.ny;
-        const fwdY2 = head.nx;
-        const tongueBase = { x: head.sx + fwdX2 * hr * 0.75, y: head.sy + fwdY2 * hr * 0.75 };
-        const tongueTip = { x: tongueBase.x + fwdX2 * tLen, y: tongueBase.y + fwdY2 * tLen };
-        const forkLen = tLen * 0.3;
-        const forkSpread = hr * 0.25;
-
-        ctx.strokeStyle = '#cc2244';
-        ctx.lineWidth = hr * 0.08;
-        ctx.lineCap = 'round';
-
-        // Main tongue
-        ctx.beginPath();
-        ctx.moveTo(tongueBase.x, tongueBase.y);
-        ctx.lineTo(tongueTip.x, tongueTip.y);
-        ctx.stroke();
-
-        // Fork left
-        ctx.beginPath();
-        ctx.moveTo(tongueTip.x, tongueTip.y);
-        ctx.lineTo(
-          tongueTip.x + fwdX2 * forkLen + head.nx * forkSpread,
-          tongueTip.y + fwdY2 * forkLen + head.ny * forkSpread
-        );
-        ctx.stroke();
-
-        // Fork right
-        ctx.beginPath();
-        ctx.moveTo(tongueTip.x, tongueTip.y);
-        ctx.lineTo(
-          tongueTip.x + fwdX2 * forkLen - head.nx * forkSpread,
-          tongueTip.y + fwdY2 * forkLen - head.ny * forkSpread
-        );
-        ctx.stroke();
-      }
-
-      // ── Nostrils ──
-      for (const s of [-1, 1]) {
-        const nostrilX = head.sx + (-head.ny) * hr * 0.7 + head.nx * hr * 0.18 * s;
-        const nostrilY = head.sy + head.nx * hr * 0.7 + head.ny * hr * 0.18 * s;
-        ctx.fillStyle = hsl(HUE_BASE, 30, 15, 0.6);
-        ctx.beginPath();
-        ctx.ellipse(nostrilX, nostrilY, hr * 0.06, hr * 0.04, Math.atan2(head.ny, head.nx), 0, Math.PI * 2);
-        ctx.fill();
-      }
     }
 
-    // ─── Foreground sparkle particles ────────────────────────
-    for (let pi = 0; pi < 20; pi++) {
-      const seed = pi * 73.1;
-      const px = noise(t * 0.3 + seed, seed + 300) * W * 0.5;
-      const py = noise(t * 0.25 + seed * 0.6, seed + 400) * H * 0.4;
-      const pz = -50 + noise(t * 0.2 + seed, seed + 500) * 80;
-      const proj = project({ x: px, y: py, z: pz }, cx, cy, FOV);
-      const pr = (1.5 + Math.sin(t * 1.2 + seed) * 1) * proj.scale;
-      if (pr < 0.4) continue;
-      const alpha = clamp(0.2 + Math.sin(t * 1.5 + seed * 3) * 0.15, 0.05, 0.4);
-      ctx.fillStyle = hsl(152, 90, 80, alpha);
-      ctx.shadowColor = hsl(152, 90, 70, 0.5);
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      ctx.arc(proj.sx, proj.sy, pr, 0, Math.PI * 2);
-      ctx.fill();
+    // Coins
+    for (const coin of state.coins) {
+      const bob = Math.sin(t * coin.speed + coin.phase) * S * 0.012;
+      const sq = 0.4 + Math.abs(Math.sin(t * coin.speed * 0.8 + coin.phase)) * 0.6;
+      ctx.save(); ctx.shadowColor = '#ffd700'; ctx.shadowBlur = coin.size * 1.5;
+      ctx.fillStyle = '#ffd700'; ctx.beginPath();
+      ctx.ellipse(coin.x, coin.y + bob, coin.size * sq, coin.size, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffaa00'; ctx.lineWidth = coin.size * 0.15; ctx.beginPath();
+      ctx.ellipse(coin.x, coin.y + bob, coin.size * sq * 0.65, coin.size * 0.65, 0, 0, Math.PI * 2); ctx.stroke();
+      if (sq > 0.5) {
+        ctx.fillStyle = '#cc8800'; ctx.font = `bold ${Math.round(coin.size * 1.1)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('$', coin.x, coin.y + bob + coin.size * 0.05);
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath();
+      ctx.ellipse(coin.x - coin.size * 0.15 * sq, coin.y + bob - coin.size * 0.2, coin.size * 0.2 * sq, coin.size * 0.15, -0.3, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    // Background particles
+    for (let i = state.particles.length - 1; i >= 0; i--) {
+      const p = state.particles[i]; p.x += p.vx; p.y += p.vy; p.life++;
+      if (p.life >= p.maxLife) { state.particles.splice(i, 1); continue; }
+      const alpha = 1 - p.life / p.maxLife;
+      ctx.fillStyle = hsl(p.hue, 100, 70, alpha * 0.7);
+      ctx.shadowColor = hsl(p.hue, 100, 60, alpha * 0.5); ctx.shadowBlur = p.size * 3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 - p.life / p.maxLife * 0.5), 0, Math.PI * 2); ctx.fill();
     }
     ctx.shadowBlur = 0;
 
-    // ─── Tail energy trail ───────────────────────────────────
-    const tailCount = 15;
-    for (let ti = 0; ti < tailCount; ti++) {
-      const tailIdx = SEGS - 1 - ti;
-      if (tailIdx < 0) break;
-      const seg = segData[tailIdx];
-      if (seg.radius < 0.5) continue;
-      const alpha = (1 - ti / tailCount) * 0.25;
-      const pr = seg.radius * (0.5 + ti * 0.08);
-      const offset = Math.sin(t * 3 + ti * 0.5) * seg.radius * 0.5;
-      ctx.fillStyle = hsl(152 + ti * 5, 80, 60, alpha);
-      ctx.beginPath();
-      ctx.arc(seg.sx + seg.nx * offset, seg.sy + seg.ny * offset, pr, 0, Math.PI * 2);
-      ctx.fill();
+    // === SNAKE  Vibrant 2D Cartoon Zigzag ===
+    const SEGS = 28;
+    const snakeScale = S * 0.55;
+    const segLen = snakeScale / SEGS;
+    const centerX = W / 2;
+    const centerY = H * 0.42;
+
+    // Build zigzag lightning-bolt path
+    const points: { x: number; y: number }[] = [];
+    for (let i = 0; i < SEGS; i++) {
+      const frac = i / (SEGS - 1);
+      const waveX = Math.sin(frac * Math.PI * 2.5 + t * 1.2) * snakeScale * 0.32;
+      const progress = (frac - 0.5) * snakeScale * 0.8;
+      const zigAmp = snakeScale * 0.1 * (1 - Math.abs(frac - 0.5) * 1.2);
+      const zigX = ((i % 2) === 0 ? 1 : -1) * zigAmp;
+      const breathe = Math.sin(t * 2 + frac * 6) * snakeScale * 0.015;
+      points.push({ x: centerX + waveX + zigX + breathe, y: centerY + progress });
     }
 
-    // ─── Loop ────────────────────────────────────────────────
+    // Per-segment info
+    const segInfo: { x: number; y: number; angle: number; thick: number }[] = [];
+    for (let i = 0; i < SEGS; i++) {
+      const next = points[Math.min(i + 1, SEGS - 1)]; const prev = points[Math.max(i - 1, 0)];
+      const angle = Math.atan2(next.y - prev.y, next.x - prev.x);
+      let thick: number; const frac = i / (SEGS - 1);
+      if (frac < 0.06) thick = lerp(0.5, 1.0, frac / 0.06);
+      else if (frac < 0.18) thick = 1.0;
+      else thick = lerp(1.0, 0.2, (frac - 0.18) / 0.82);
+      thick *= segLen * 0.85;
+      segInfo.push({ ...points[i], angle, thick });
+    }
+
+    // Motion streaks behind body
+    ctx.save();
+    for (let i = Math.floor(SEGS * 0.4); i < SEGS; i += 2) {
+      const seg = segInfo[i]; const frac = i / SEGS;
+      const sLen = seg.thick * (2 + frac * 4);
+      ctx.strokeStyle = hsl(200, 100, 70, (1 - frac) * 0.25);
+      ctx.lineWidth = seg.thick * 0.3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(seg.x, seg.y);
+      ctx.lineTo(seg.x - Math.cos(seg.angle) * sLen, seg.y - Math.sin(seg.angle) * sLen); ctx.stroke();
+    }
+    ctx.restore();
+
+    // Trail particles from tail
+    if (SEGS > 5) {
+      const tail = segInfo[SEGS - 1];
+      if (Math.random() < 0.5) {
+        state.particles.push({
+          x: tail.x + (Math.random() - 0.5) * tail.thick * 2, y: tail.y + (Math.random() - 0.5) * tail.thick,
+          vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2,
+          life: 0, maxLife: 25 + Math.random() * 20, size: S * (0.003 + Math.random() * 0.004), hue: 20,
+        });
+      }
+    }
+
+    // Draw body segments back-to-front
+    for (let i = SEGS - 1; i >= 1; i--) {
+      const seg = segInfo[i]; const thick = seg.thick;
+      const isBlue = i % 2 === 0;
+      const bHue = isBlue ? 210 : 25; const bSat = 100; const bLit = isBlue ? 55 : 58;
+
+      ctx.save();
+      ctx.shadowColor = hsl(bHue, 100, 60, 0.8); ctx.shadowBlur = thick * 1.5;
+      // Outline
+      ctx.fillStyle = '#0a0a1a'; ctx.beginPath(); ctx.arc(seg.x, seg.y, thick + thick * 0.22, 0, Math.PI * 2); ctx.fill();
+      // Fill gradient
+      const sg = ctx.createRadialGradient(seg.x - thick * 0.25, seg.y - thick * 0.3, thick * 0.1, seg.x, seg.y, thick);
+      sg.addColorStop(0, hsl(bHue, bSat, bLit + 25)); sg.addColorStop(0.5, hsl(bHue, bSat, bLit));
+      sg.addColorStop(1, hsl(bHue, bSat - 10, bLit - 15));
+      ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(seg.x, seg.y, thick, 0, Math.PI * 2); ctx.fill();
+      // Highlight
+      ctx.fillStyle = hsl(bHue, 100, 85, 0.3); ctx.beginPath();
+      ctx.ellipse(seg.x - thick * 0.2, seg.y - thick * 0.25, thick * 0.35, thick * 0.25, -0.5, 0, Math.PI * 2); ctx.fill();
+      // Lightning accent
+      if (i % 3 === 0 && i > 2 && i < SEGS - 2) {
+        const nx = segInfo[i - 1];
+        ctx.strokeStyle = hsl(50, 100, 85, 0.4 + Math.sin(t * 3 + i) * 0.2);
+        ctx.lineWidth = thick * 0.12; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(seg.x, seg.y); ctx.lineTo(nx.x, nx.y); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // === HEAD ===
+    const head = segInfo[0]; const headR = head.thick * 2.0;
+    const hx = head.x; const hy = head.y; const hAngle = head.angle;
+
+    ctx.save();
+    ctx.shadowColor = '#22ccff'; ctx.shadowBlur = headR * 1.2;
+    // Outline
+    ctx.fillStyle = '#0a0a1a'; ctx.beginPath(); ctx.arc(hx, hy, headR + headR * 0.12, 0, Math.PI * 2); ctx.fill();
+    // Fill
+    const hg = ctx.createRadialGradient(hx - headR * 0.25, hy - headR * 0.3, headR * 0.1, hx, hy, headR);
+    hg.addColorStop(0, '#66eeff'); hg.addColorStop(0.35, '#22bbff'); hg.addColorStop(0.7, '#1188dd'); hg.addColorStop(1, '#0055aa');
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(hx, hy, headR, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Snout bump
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(hAngle);
+    const sng = ctx.createRadialGradient(headR * 0.55, 0, headR * 0.05, headR * 0.45, 0, headR * 0.45);
+    sng.addColorStop(0, '#88ffff'); sng.addColorStop(0.6, '#22bbff'); sng.addColorStop(1, '#1188dd');
+    ctx.fillStyle = sng; ctx.beginPath(); ctx.ellipse(headR * 0.5, 0, headR * 0.45, headR * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Nostrils
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(hAngle);
+    ctx.fillStyle = '#004488';
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(headR * 0.82, headR * 0.15 * s, headR * 0.06, headR * 0.045, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+
+    // EYES
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(hAngle);
+    for (const side of [-1, 1]) {
+      const eX = headR * 0.22; const eY = headR * 0.42 * side;
+      const eRx = headR * 0.32; const eRy = headR * 0.38;
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath();
+      ctx.ellipse(eX + headR * 0.02, eY + headR * 0.04, eRx * 1.1, eRy * 1.05, 0, 0, Math.PI * 2); ctx.fill();
+      // White
+      const eg = ctx.createRadialGradient(eX - eRx * 0.15, eY - eRy * 0.2, eRx * 0.1, eX, eY, eRx);
+      eg.addColorStop(0, '#ffffff'); eg.addColorStop(0.7, '#f0f0f0'); eg.addColorStop(1, '#d8d8d8');
+      ctx.fillStyle = eg; ctx.beginPath(); ctx.ellipse(eX, eY, eRx, eRy, 0, 0, Math.PI * 2); ctx.fill();
+      // Outline
+      ctx.strokeStyle = '#0a0a1a'; ctx.lineWidth = headR * 0.06; ctx.beginPath();
+      ctx.ellipse(eX, eY, eRx, eRy, 0, 0, Math.PI * 2); ctx.stroke();
+      // Pupil
+      const pOff = Math.sin(t * 0.8) * headR * 0.05; const pr = eRx * 0.52;
+      ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(eX + headR * 0.06 + pOff, eY + headR * 0.02, pr, 0, Math.PI * 2); ctx.fill();
+      // Highlights
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(eX + headR * 0.02, eY - headR * 0.06 * side * 0.3, pr * 0.42, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(eX + headR * 0.1, eY + headR * 0.06, pr * 0.18, 0, Math.PI * 2); ctx.fill();
+      // Eyelid
+      ctx.strokeStyle = hsl(210, 60, 35, 0.5); ctx.lineWidth = headR * 0.04; ctx.beginPath();
+      ctx.arc(eX, eY, eRy * 1.05, Math.PI * (-0.85 + (side > 0 ? 0 : 0.15)), Math.PI * (-0.15 + (side > 0 ? -0.15 : 0))); ctx.stroke();
+    }
+    ctx.restore();
+
+    // Smile
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(hAngle);
+    ctx.strokeStyle = '#003366'; ctx.lineWidth = headR * 0.07; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(headR * 0.52, 0, headR * 0.32, Math.PI * -0.35, Math.PI * 0.35); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath();
+    ctx.arc(headR * 0.52, 0, headR * 0.28, Math.PI * -0.2, Math.PI * 0.2);
+    ctx.lineTo(headR * 0.52 + headR * 0.24, 0); ctx.fill();
+    // Tongue
+    const tongueOut = Math.sin(t * 2.5) * 0.5 + 0.5;
+    if (tongueOut > 0.6) {
+      ctx.fillStyle = '#ff5577'; const te = (tongueOut - 0.6) / 0.4;
+      ctx.beginPath(); ctx.ellipse(headR * 0.85 + te * headR * 0.3, 0, headR * 0.08 + te * headR * 0.08, headR * 0.06, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    // Cheek blush
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(hAngle);
+    ctx.fillStyle = 'rgba(255,100,130,0.18)';
+    ctx.beginPath(); ctx.ellipse(headR * 0.1, -headR * 0.6, headR * 0.2, headR * 0.12, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(headR * 0.1, headR * 0.6, headR * 0.2, headR * 0.12, 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Crown highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.beginPath();
+    ctx.ellipse(hx - headR * 0.15, hy - headR * 0.35, headR * 0.5, headR * 0.22, -0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Energy sparks around snake
+    ctx.save();
+    for (let i = 0; i < 6; i++) {
+      const sT = t * 2.5 + i * 1.047;
+      const si = clamp(Math.floor(Math.abs(Math.sin(sT * 0.3 + i)) * SEGS * 0.8), 0, SEGS - 1);
+      const seg = segInfo[si]; const sDist = seg.thick * (2 + Math.sin(sT) * 0.5);
+      const sA = sT * 3 + i * 2; const sx = seg.x + Math.cos(sA) * sDist; const sy = seg.y + Math.sin(sA) * sDist;
+      const sSize = S * (0.004 + Math.sin(sT * 2) * 0.002);
+      ctx.fillStyle = hsl(50, 100, 80, 0.7 + Math.sin(sT * 4) * 0.3);
+      ctx.shadowColor = '#ffff44'; ctx.shadowBlur = sSize * 8;
+      ctx.beginPath(); ctx.arc(sx, sy, sSize, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.shadowBlur = 0; ctx.restore();
+
+    // Floating score indicators
+    for (let i = state.scores.length - 1; i >= 0; i--) {
+      const sc = state.scores[i]; sc.x += sc.vx; sc.y += sc.vy; sc.vy *= 0.98; sc.life++;
+      if (sc.life >= sc.maxLife) { state.scores.splice(i, 1); continue; }
+      const alpha = sc.life < 10 ? sc.life / 10 : Math.max(0, 1 - (sc.life - sc.maxLife * 0.6) / (sc.maxLife * 0.4));
+      const popScale = sc.life < 8 ? 0.5 + (sc.life / 8) * 0.5 : 1;
+      const fSize = S * 0.035 * sc.scale * popScale;
+      ctx.save(); ctx.globalAlpha = clamp(alpha, 0, 1);
+      ctx.font = `900 ${Math.round(fSize)}px "Arial Black", "Impact", sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.strokeStyle = '#000000'; ctx.lineWidth = fSize * 0.18; ctx.lineJoin = 'round'; ctx.strokeText(sc.text, sc.x, sc.y);
+      ctx.fillStyle = sc.color; ctx.fillText(sc.text, sc.x, sc.y);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillText(sc.text, sc.x, sc.y - fSize * 0.03);
+      ctx.restore();
+    }
+
     timeRef.current += 0.016;
     rafRef.current = requestAnimationFrame(render);
   }, []);
 
   useEffect(() => {
     rafRef.current = requestAnimationFrame(render);
-
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const clientX = 'touches' in e ? e.touches[0]?.clientX ?? rect.width / 2 : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0]?.clientY ?? rect.height / 2 : e.clientY;
-      mouseRef.current = {
-        x: clamp((clientX - rect.left) / rect.width, 0, 1),
-        y: clamp((clientY - rect.top) / rect.height, 0, 1),
-      };
-    };
-
-    window.addEventListener('mousemove', handleMove, { passive: true });
-    window.addEventListener('touchmove', handleMove, { passive: true });
-
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('touchmove', handleMove);
-    };
+    return () => cancelAnimationFrame(rafRef.current);
   }, [render]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-      }}
-    />
+    <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
   );
 }

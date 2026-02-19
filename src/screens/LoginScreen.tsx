@@ -5,54 +5,79 @@ export default function LoginScreen() {
   const { signInWithGoogle, loading, error } = useAuthStore();
 
   return (
-    <div className="min-h-screen min-h-[100dvh] flex items-center justify-center bg-gray-950 relative overflow-hidden px-4">
-      {/* ── 3D Snake Canvas (fullscreen behind everything) ── */}
+    <div className="min-h-screen min-h-[100dvh] flex items-center justify-center relative overflow-hidden px-4"
+      style={{ background: '#020208' }}>
+      {/* ── Cartoon Snake Canvas (fullscreen behind everything) ── */}
       <Snake3DHero />
 
-      {/* Subtle vignette overlay for contrast */}
+      {/* Vignette overlay for readability */}
       <div className="absolute inset-0 pointer-events-none" style={{
-        background: 'radial-gradient(ellipse at center, transparent 30%, rgba(3,7,18,0.65) 80%, rgba(3,7,18,0.92) 100%)',
+        background: 'radial-gradient(ellipse at center, transparent 25%, rgba(2,2,8,0.5) 65%, rgba(2,2,8,0.88) 100%)',
       }} />
 
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.04] pointer-events-none"
-        style={{
-          backgroundImage: 'linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-        }}
-      />
+      {/* Content overlay */}
+      <div className="relative z-10 flex flex-col items-center gap-4 sm:gap-6 p-4 sm:p-6 w-full max-w-lg">
 
-      <div className="relative z-10 flex flex-col items-center gap-5 sm:gap-8 p-4 sm:p-8 w-full max-w-lg">
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-2 sm:gap-4 animate-float">
-          <div className="relative">
-            <h1 className="text-5xl sm:text-7xl md:text-8xl font-black tracking-tighter" style={{ textShadow: '0 0 40px rgba(16,185,129,0.3), 0 2px 6px rgba(0,0,0,0.5)' }}>
-              <span className="text-emerald-400 glow-text">B</span>
-              <span className="text-white">entropy</span>
-            </h1>
-            <div className="absolute -bottom-1 sm:-bottom-2 left-0 right-0 h-0.5 sm:h-1 bg-gradient-to-r from-emerald-500 via-blue-500 to-purple-500 rounded-full" style={{ boxShadow: '0 0 16px rgba(16,185,129,0.5)' }} />
-          </div>
-          <p className="text-base sm:text-xl text-gray-400 font-medium tracking-widest uppercase" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>
-            Arena
-          </p>
+        {/* ── BENTROPY.ARENA Title — Arcade Typography ── */}
+        <div className="flex flex-col items-center gap-0">
+          {/* Main title */}
+          <h1 className="text-center font-black tracking-tight leading-none select-none"
+            style={{
+              fontSize: 'clamp(2.5rem, 8vw, 5rem)',
+              background: 'linear-gradient(135deg, #ffdd44 0%, #44ff88 35%, #22ccff 65%, #6644ff 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              filter: 'drop-shadow(0 0 20px rgba(68,255,136,0.4)) drop-shadow(0 4px 8px rgba(0,0,0,0.8))',
+              fontFamily: '"Arial Black", "Impact", "Trebuchet MS", sans-serif',
+              letterSpacing: '-0.02em',
+            }}>
+            BENTROPY
+          </h1>
+          {/* Separator line */}
+          <div className="w-full max-w-xs h-1 rounded-full mx-auto my-1 sm:my-2" style={{
+            background: 'linear-gradient(90deg, transparent 0%, #ffdd44 15%, #44ff88 40%, #22ccff 60%, #6644ff 85%, transparent 100%)',
+            boxShadow: '0 0 12px rgba(68,255,136,0.5), 0 0 30px rgba(34,204,255,0.3)',
+          }} />
+          {/* .ARENA subtitle */}
+          <h2 className="text-center font-black tracking-widest select-none"
+            style={{
+              fontSize: 'clamp(1rem, 3.5vw, 1.8rem)',
+              background: 'linear-gradient(90deg, #ff6644 0%, #ffdd44 50%, #ff6644 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              filter: 'drop-shadow(0 0 10px rgba(255,102,68,0.4))',
+              fontFamily: '"Arial Black", "Impact", sans-serif',
+              letterSpacing: '0.3em',
+            }}>
+            .ARENA
+          </h2>
         </div>
 
-        {/* Play description */}
-        <p className="text-gray-300 text-center max-w-md text-sm sm:text-lg px-2" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.7)' }}>
-          Jogo multiplayer estilo slither.io. Coma, cresça e domine a arena!
+        {/* ── Tagline ── */}
+        <p className="text-center max-w-sm text-sm sm:text-base font-bold px-2" style={{
+          color: '#aabbcc',
+          textShadow: '0 2px 8px rgba(0,0,0,0.8), 0 0 20px rgba(34,204,255,0.15)',
+          letterSpacing: '0.05em',
+        }}>
+          ⚡ Coma, cresça e domine a arena! ⚡
         </p>
 
-        {/* Login button */}
+        {/* ── Login Button — Vibrant Game Style ── */}
         <button
           onClick={signInWithGoogle}
           disabled={loading}
-          className="group relative flex items-center gap-3 sm:gap-4 px-6 sm:px-8 py-3 sm:py-4 
-                     bg-white/95 hover:bg-white text-gray-900 font-bold rounded-2xl 
-                     transition-all duration-300 
-                     shadow-lg shadow-emerald-500/15 hover:shadow-emerald-500/30 hover:scale-105 
-                     active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-                     w-full sm:w-auto justify-center backdrop-blur-sm"
+          className="group relative flex items-center gap-3 sm:gap-4 px-7 sm:px-10 py-3.5 sm:py-4
+                     font-black rounded-2xl transition-all duration-300
+                     hover:scale-105 active:scale-95
+                     disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
+                     w-full sm:w-auto justify-center"
+          style={{
+            background: 'linear-gradient(135deg, #ffffff 0%, #f0f0f0 100%)',
+            boxShadow: '0 0 25px rgba(68,255,136,0.2), 0 4px 20px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.9)',
+            border: '2px solid rgba(68,255,136,0.3)',
+          }}
         >
           {/* Google Icon */}
           <svg className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" viewBox="0 0 24 24">
@@ -61,23 +86,31 @@ export default function LoginScreen() {
             <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
           </svg>
-          <span className="text-base sm:text-lg">
+          <span className="text-base sm:text-lg text-gray-800">
             {loading ? 'Entrando...' : 'Entrar com Google'}
           </span>
-          <div className="absolute inset-0 rounded-2xl border-2 border-transparent group-hover:border-emerald-400/30 transition-colors" />
+          {/* Hover glow border */}
+          <div className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+            style={{ boxShadow: '0 0 30px rgba(68,255,136,0.35), inset 0 0 20px rgba(68,255,136,0.08)' }} />
         </button>
 
-        {/* Error message */}
+        {/* Error */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 sm:px-6 py-3 text-red-400 text-xs sm:text-sm max-w-md text-center backdrop-blur-sm">
+          <div className="rounded-xl px-4 sm:px-6 py-3 text-xs sm:text-sm max-w-md text-center backdrop-blur-sm"
+            style={{
+              background: 'rgba(255,50,50,0.12)',
+              border: '1px solid rgba(255,50,50,0.3)',
+              color: '#ff6666',
+            }}>
             {error}
           </div>
         )}
 
         {/* Footer */}
-        <div className="mt-4 sm:mt-8 flex flex-col items-center gap-1 sm:gap-2 text-gray-500 text-[10px] sm:text-sm">
-          <p style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>Feito com ❤️ usando React + TypeScript + Firebase</p>
-          <p style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>v1.0.0 — Bentropy Arena</p>
+        <div className="mt-2 sm:mt-4 flex flex-col items-center gap-0.5 sm:gap-1 text-[10px] sm:text-xs"
+          style={{ color: '#445566', textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>
+          <p>React + TypeScript + Firebase</p>
+          <p>v1.0.0</p>
         </div>
       </div>
     </div>
