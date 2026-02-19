@@ -269,13 +269,13 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  worldSize: 14000,
+  worldSize: 12000,
   maxPlayers: 30,
-  foodCount: 5000,
-  baseSpeed: 4,
-  boostSpeed: 8,
-  boostCost: 0.3,
-  growthRate: 2,
+  foodCount: 3500,
+  baseSpeed: 3.8,
+  boostSpeed: 7.2,
+  boostCost: 0.25,
+  growthRate: 1,
   tickRate: 60,
   segmentSize: 10,
   foodSize: 6,

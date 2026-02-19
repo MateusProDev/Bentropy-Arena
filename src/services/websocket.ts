@@ -317,6 +317,22 @@ export class WSClient {
     const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
 
     for (let i = 0; i < count; i++) {
+      // Tiered food: 60% small, 28% medium, 12% large
+      const roll = Math.random();
+      let size: number, value: number;
+      if (roll < 0.60) {
+        // Small food — common
+        size = 3 + Math.random() * 2;    // 3-5
+        value = 1;
+      } else if (roll < 0.88) {
+        // Medium food — moderate
+        size = 5 + Math.random() * 2.5;  // 5-7.5
+        value = 2;
+      } else {
+        // Large food — rare
+        size = 7.5 + Math.random() * 3;  // 7.5-10.5
+        value = 4;
+      }
       this.botFoods.push({
         id: `food_${i}`,
         position: {
@@ -324,8 +340,8 @@ export class WSClient {
           y: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
         },
         color: colors[Math.floor(Math.random() * colors.length)],
-        size: Math.random() * 4 + 4,
-        value: Math.floor(Math.random() * 3) + 1,
+        size,
+        value,
       });
     }
   }
@@ -542,10 +558,11 @@ export class WSClient {
       bot.segments.unshift({ x: newX, y: newY });
       while (bot.segments.length > bot.length) bot.segments.pop();
 
-      // Boost drains length
+      // Boost drains length — proportional to size
       if (bot.boosting && bot.length > 12) {
-        bot.length -= 0.06;
-        bot.score = Math.max(0, bot.score - 0.06);
+        const drain = DEFAULT_CONFIG.boostCost * (0.6 + bot.length * 0.001);
+        bot.length -= drain;
+        bot.score = Math.max(0, bot.score - drain);
       }
 
       // ── Collision: head vs nearby segment ────────────────────
@@ -579,14 +596,14 @@ export class WSClient {
       if (botDied) {
         bot.alive = false;
         deadIds.push(bot.id);
-        // Drop body as food
-        const spacing = Math.max(1, Math.floor(bot.segments.length / 80));
+        // Drop body as food (tiered sizes based on snake length)
+        const spacing = Math.max(1, Math.floor(bot.segments.length / 60));
         for (let si = 0; si < bot.segments.length; si += spacing) {
           const seg = bot.segments[si];
           this.botFoods.push({
             id: `food_drop_${now}_${si}`,
             position: { x: seg.x + (Math.random()-0.5)*12, y: seg.y + (Math.random()-0.5)*12 },
-            color: bot.color, size: Math.random()*3+5, value: 2,
+            color: bot.color, size: 5 + Math.random()*3, value: 2,
           });
         }
         // Schedule respawn
@@ -602,15 +619,11 @@ export class WSClient {
         const fdx = newX - f.position.x, fdy = newY - f.position.y;
         if (fdx*fdx + fdy*fdy < eatR2) {
           bot.score += f.value;
-          bot.length += DEFAULT_CONFIG.growthRate;
-          // Replace food at a new random position
-          const colors = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
-          this.botFoods[fi] = {
-            id: `food_r_${now}_${fi}`,
-            position: { x: 50 + Math.random()*(ws-100), y: 50 + Math.random()*(ws-100) },
-            color: colors[(Math.random()*colors.length)|0],
-            size: Math.random()*4+4, value: ((Math.random()*3)|0)+1,
-          };
+          // Growth proportional to food value with diminishing returns
+          const growthDiminish = 1 / (1 + Math.max(0, bot.length - 30) * 0.003);
+          bot.length += f.value * DEFAULT_CONFIG.growthRate * growthDiminish;
+          // Replace food at a new random position (tiered)
+          this.botFoods[fi] = this.spawnOneTieredFood(`food_r_${now}_${fi}`);
           this.foodHashDirty = true;
           break;
         }
@@ -735,8 +748,8 @@ export class WSClient {
   }
 
   public dropPlayerFood(player: Player): void {
-    // Drop the player's entire body as food on the arena
-    const spacing = Math.max(1, Math.floor(player.segments.length / 80));
+    // Drop the player's entire body as food on the arena (richer drops for bigger snakes)
+    const spacing = Math.max(1, Math.floor(player.segments.length / 60));
     for (let i = 0; i < player.segments.length; i += spacing) {
       const seg = player.segments[i];
       if (seg) {
@@ -744,8 +757,8 @@ export class WSClient {
           id: `food_pdrop_${Date.now()}_${i}`,
           position: { x: seg.x + (Math.random() - 0.5) * 10, y: seg.y + (Math.random() - 0.5) * 10 },
           color: player.color,
-          size: Math.random() * 3 + 5,
-          value: Math.floor(Math.random() * 2) + 2,
+          size: 5 + Math.random() * 3,
+          value: 2,
         });
       }
     }
@@ -780,18 +793,35 @@ export class WSClient {
   public removeFallbackFood(foodId: string): void {
     const idx = this.botFoods.findIndex(f => f.id === foodId);
     if (idx !== -1) {
-      const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
-      this.botFoods[idx] = {
-        id: `food_r_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        position: {
-          x: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
-          y: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
-        },
-        color: colors[Math.floor(Math.random() * colors.length)],
-        size: Math.random() * 4 + 4,
-        value: Math.floor(Math.random() * 3) + 1,
-      };
+      this.botFoods[idx] = this.spawnOneTieredFood(`food_r_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
     }
+  }
+
+  /** Spawn a single tiered food item (60% small, 28% medium, 12% large) */
+  private spawnOneTieredFood(id: string): Food {
+    const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+    const roll = Math.random();
+    let size: number, value: number;
+    if (roll < 0.60) {
+      size = 3 + Math.random() * 2;
+      value = 1;
+    } else if (roll < 0.88) {
+      size = 5 + Math.random() * 2.5;
+      value = 2;
+    } else {
+      size = 7.5 + Math.random() * 3;
+      value = 4;
+    }
+    return {
+      id,
+      position: {
+        x: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
+        y: Math.random() * (DEFAULT_CONFIG.worldSize - 100) + 50,
+      },
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size,
+      value,
+    };
   }
 
   public disconnect(): void {

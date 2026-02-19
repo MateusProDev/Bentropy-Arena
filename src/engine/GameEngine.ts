@@ -312,11 +312,12 @@ export class GameEngine {
       this.localPlayer.segments.pop();
     }
 
-    // Boost cost
-    if (this.isBoosting && this.localPlayer.length > 8) {
+    // Boost cost — proportional: faster drain for larger snakes, gentler for small
+    if (this.isBoosting && this.localPlayer.length > 10) {
       if (ability !== 'fireboost') {
-        this.localPlayer.length -= 0.05;
-        this.localPlayer.score = Math.max(0, this.localPlayer.score - 0.05);
+        const boostDrain = this.config.boostCost * (0.6 + this.localPlayer.length * 0.001);
+        this.localPlayer.length -= boostDrain;
+        this.localPlayer.score = Math.max(0, this.localPlayer.score - boostDrain);
       }
       const tail = this.localPlayer.segments[this.localPlayer.segments.length - 1];
       this.addParticle(tail.x, tail.y, ability === 'fireboost' ? '#f39c12' : this.localPlayer.color, 3);
@@ -376,10 +377,12 @@ export class GameEngine {
       this.checkPlayerCollisions();
     }
 
-    // Dynamic zoom — smoother, more generous for large snakes
+    // Dynamic zoom — logarithmic curve for smooth proportional feel
+    // Small snakes see close detail; large snakes see more arena proportionally
     const playerLen = this.localPlayer.length;
-    this.targetZoom = Math.max(0.18, Math.min(1.0, 1.05 / (1 + Math.max(0, playerLen - 10) * 0.0025)));
-    this.zoom += (this.targetZoom - this.zoom) * 0.025;
+    const logLen = Math.log2(1 + Math.max(0, playerLen - 8) / 6);
+    this.targetZoom = Math.max(0.22, Math.min(0.95, 0.95 / (1 + logLen * 0.16)));
+    this.zoom += (this.targetZoom - this.zoom) * 0.03;
 
     // Camera
     this.camera.x = newHeadX - this.canvas.width / (2 * this.zoom);
@@ -419,9 +422,13 @@ export class GameEngine {
       const dx = head.x - food.position.x;
       const dy = head.y - food.position.y;
       if (dx * dx + dy * dy < eatRadiusSq) {
+        // Growth proportional to food value — diminishing returns at large sizes
+        const growthDiminish = 1 / (1 + Math.max(0, this.localPlayer.length - 30) * 0.003);
+        const growthAmount = food.value * this.config.growthRate * growthDiminish;
         this.localPlayer.score += food.value;
-        this.localPlayer.length += this.config.growthRate;
-        this.addParticle(food.position.x, food.position.y, food.color, 5);
+        this.localPlayer.length += growthAmount;
+        const particleCount = food.size > 6 ? 8 : food.size > 4 ? 5 : 3;
+        this.addParticle(food.position.x, food.position.y, food.color, particleCount);
         this.onFoodEaten?.(food.id);
         this.onScoreUpdate?.(this.localPlayer.score);
         eaten.push(idx);
@@ -862,9 +869,10 @@ export class GameEngine {
   }
 
   private getThicknessMult(len: number): number {
-    // Fatter, more satisfying growth curve: starts thick, grows steadily
-    const effective = Math.max(0, len - 10);
-    return 1.2 + Math.log2(1 + effective / 8) * 1.1;
+    // Proportional growth curve: starts modestly, grows logarithmically
+    // Avoids snakes getting too fat too quickly or staying too thin
+    const effective = Math.max(0, len - 8);
+    return 1.1 + Math.log2(1 + effective / 12) * 0.9;
   }
 
   private renderSnake(ctx: CanvasRenderingContext2D, player: Player, isLocal = false): void {

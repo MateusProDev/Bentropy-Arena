@@ -255,13 +255,14 @@ export default function GameScreen() {
       if (!lp) return;
 
       if (ability === 'growth') {
-        // Instant effect: +50 length
+        // Instant effect: growth proportional to current size (min 30, max 80)
+        const growthBonus = Math.floor(Math.min(80, Math.max(30, lp.length * 0.4)));
         useGameStore.getState().updateLocalPlayer({
-          length: lp.length + 50,
-          score: lp.score + 50,
+          length: lp.length + growthBonus,
+          score: lp.score + growthBonus,
         });
-        setLength(Math.floor(lp.length + 50));
-        setScore(Math.floor(lp.score + 50));
+        setLength(Math.floor(lp.length + growthBonus));
+        setScore(Math.floor(lp.score + growthBonus));
       } else {
         // Timed ability
         useGameStore.getState().updateLocalPlayer({
