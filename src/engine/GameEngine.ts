@@ -944,8 +944,15 @@ export class GameEngine {
         }
         continue;
       }
-      const t = 1 - i / segments.length;
-      const radius = baseSize * (0.4 + t * 0.6);
+      const t = i / segments.length; // 0 at head, 1 at tail
+      // Uniform body with gentle taper only at tail tip (last 15%)
+      let radius: number;
+      if (t < 0.85) {
+        radius = baseSize; // uniform width like slither.io
+      } else {
+        const tailT = (t - 0.85) / 0.15; // 0..1 over last 15%
+        radius = baseSize * (1 - tailT * 0.65); // taper to 35%
+      }
       visSegs.push({ x: seg.x, y: seg.y, r: radius });
     }
 
@@ -990,9 +997,9 @@ export class GameEngine {
 
     ctx.restore();
 
-    // === Head — improved with snout shape and expressive features ===
+    // === Head — round, slither.io / wormate.io style ===
     const head = segments[0];
-    const headSize = baseSize * 1.3;
+    const headSize = baseSize * 1.1; // just slightly bigger than body
 
     // Head glow
     const glowActive = isLocal || player.boosting || abilityGlow;
@@ -1020,9 +1027,9 @@ export class GameEngine {
     headGrad.addColorStop(1, bodyColorDark);
     ctx.fillStyle = headGrad;
 
-    // Round head shape (slither.io / wormate.io style)
+    // Perfect circle head (slither.io / wormate.io style)
     ctx.beginPath();
-    ctx.ellipse(headSize * 0.06, 0, headSize * 1.0, headSize * 0.95, 0, 0, Math.PI * 2);
+    ctx.arc(0, 0, headSize, 0, Math.PI * 2);
     ctx.fill();
 
     // Border stroke
