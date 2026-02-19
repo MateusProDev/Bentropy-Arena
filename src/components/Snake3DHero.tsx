@@ -1,23 +1,17 @@
-﻿import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 
 // Helpers
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function clamp(v: number, lo: number, hi: number) { return v < lo ? lo : v > hi ? hi : v; }
 function hsl(h: number, s: number, l: number, a = 1) { return `hsla(${h % 360},${s}%,${l}%,${a})`; }
-function seededRandom(seed: number): number { const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
-interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; size: number; hue: number; }
-interface FloatingScore { x: number; y: number; text: string; life: number; maxLife: number; color: string; vx: number; vy: number; scale: number; }
-interface Crystal { x: number; y: number; size: number; hue: number; phase: number; pts: number; }
-interface Coin { x: number; y: number; size: number; phase: number; speed: number; }
+interface Sparkle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; size: number; hue: number; type: 'star' | 'heart' | 'circle'; rot: number; }
 
 export default function Snake3DHero() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
   const timeRef = useRef(0);
-  const stateRef = useRef<{
-    particles: Particle[]; scores: FloatingScore[]; crystals: Crystal[]; coins: Coin[]; init: boolean;
-  }>({ particles: [], scores: [], crystals: [], coins: [], init: false });
+  const stateRef = useRef<{ sparkles: Sparkle[]; init: boolean }>({ sparkles: [], init: false });
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -35,600 +29,401 @@ export default function Snake3DHero() {
     const state = stateRef.current;
     const S = Math.min(W, H);
 
-    // Init persistent objects once
-    if (!state.init) {
-      for (let i = 0; i < 8; i++) {
-        state.crystals.push({
-          x: seededRandom(i * 7 + 1) * W, y: seededRandom(i * 7 + 2) * H,
-          size: S * (0.03 + seededRandom(i * 7 + 3) * 0.04),
-          hue: 260 + seededRandom(i * 7 + 4) * 40,
-          phase: seededRandom(i * 7 + 5) * Math.PI * 2,
-          pts: 4 + Math.floor(seededRandom(i * 7 + 6) * 3),
-        });
+    // Draw a 5-point star
+    function drawStar(scx: number, scy: number, r: number, rot: number) {
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = rot + (i / 10) * Math.PI * 2 - Math.PI / 2;
+        const rad = i % 2 === 0 ? r : r * 0.45;
+        if (i === 0) ctx.moveTo(scx + Math.cos(a) * rad, scy + Math.sin(a) * rad);
+        else ctx.lineTo(scx + Math.cos(a) * rad, scy + Math.sin(a) * rad);
       }
-      for (let i = 0; i < 12; i++) {
-        state.coins.push({
-          x: seededRandom(i * 11 + 50) * W, y: seededRandom(i * 11 + 51) * H,
-          size: S * (0.015 + seededRandom(i * 11 + 52) * 0.012),
-          phase: seededRandom(i * 11 + 53) * Math.PI * 2,
-          speed: 0.5 + seededRandom(i * 11 + 54) * 1.5,
-        });
-      }
-      state.init = true;
+      ctx.closePath();
     }
 
-    // Spawn spark particles
-    if (Math.random() < 0.4) {
-      state.particles.push({
+    // Draw a heart
+    function drawHeart(hcx: number, hcy: number, size: number) {
+      ctx.beginPath();
+      ctx.moveTo(hcx, hcy + size * 0.35);
+      ctx.bezierCurveTo(hcx - size * 0.55, hcy - size * 0.1, hcx - size * 0.55, hcy - size * 0.55, hcx, hcy - size * 0.3);
+      ctx.bezierCurveTo(hcx + size * 0.55, hcy - size * 0.55, hcx + size * 0.55, hcy - size * 0.1, hcx, hcy + size * 0.35);
+      ctx.closePath();
+    }
+
+    // Spawn sparkles
+    if (Math.random() < 0.5) {
+      const types: Array<'star' | 'heart' | 'circle'> = ['star', 'star', 'star', 'heart', 'circle'];
+      state.sparkles.push({
         x: Math.random() * W, y: Math.random() * H,
-        vx: (Math.random() - 0.5) * 1.5, vy: -Math.random() * 2 - 0.5,
-        life: 0, maxLife: 40 + Math.random() * 60,
-        size: S * (0.003 + Math.random() * 0.005),
-        hue: [30, 50, 180, 280, 340][Math.floor(Math.random() * 5)],
-      });
-    }
-    // Spawn floating score
-    if (Math.random() < 0.012) {
-      const texts = ['+100', '+200', '+300', '+450', '+500', '+750', '+1000'];
-      const colors = ['#ffdd44', '#44ff88', '#44ddff', '#ff6644', '#ff44cc', '#88ff44'];
-      state.scores.push({
-        x: W * 0.1 + Math.random() * W * 0.8, y: H * 0.15 + Math.random() * H * 0.55,
-        text: texts[Math.floor(Math.random() * texts.length)],
-        life: 0, maxLife: 90,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        vx: (Math.random() - 0.5) * 0.8, vy: -1.2 - Math.random() * 0.8,
-        scale: 0.7 + Math.random() * 0.6,
+        vx: (Math.random() - 0.5) * 0.8, vy: -Math.random() * 1.2 - 0.3,
+        life: 0, maxLife: 50 + Math.random() * 60,
+        size: S * (0.008 + Math.random() * 0.015),
+        hue: [40, 60, 160, 280, 320, 200][Math.floor(Math.random() * 6)],
+        type: types[Math.floor(Math.random() * types.length)],
+        rot: Math.random() * Math.PI * 2,
       });
     }
 
-    // === BACKGROUND ===
-    const bgGrad = ctx.createRadialGradient(W / 2, H * 0.45, S * 0.1, W / 2, H / 2, S * 0.9);
-    bgGrad.addColorStop(0, '#1a0a2e'); bgGrad.addColorStop(0.4, '#0d0d2b');
-    bgGrad.addColorStop(0.7, '#060618'); bgGrad.addColorStop(1, '#020208');
+    // BACKGROUND
+    const bgGrad = ctx.createRadialGradient(W / 2, H * 0.35, S * 0.05, W / 2, H * 0.5, S * 1.0);
+    bgGrad.addColorStop(0, '#1a0a3e'); bgGrad.addColorStop(0.3, '#120828');
+    bgGrad.addColorStop(0.6, '#0a0518'); bgGrad.addColorStop(1, '#030210');
     ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
-    // Grid
-    ctx.save(); ctx.globalAlpha = 0.06; ctx.strokeStyle = '#6644ff'; ctx.lineWidth = 1;
-    const gs = S * 0.06;
-    for (let gx = 0; gx < W + gs; gx += gs) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
-    for (let gy = 0; gy < H + gs; gy += gs) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
+    // Soft pastel bokeh
+    ctx.save();
+    for (let i = 0; i < 12; i++) {
+      const bx = (Math.sin(i * 1.7 + t * 0.15) * 0.5 + 0.5) * W;
+      const by = (Math.cos(i * 2.3 + t * 0.12) * 0.5 + 0.5) * H;
+      const br = S * (0.05 + Math.sin(i * 3.1) * 0.03);
+      const bAlpha = 0.04 + Math.sin(t * 0.8 + i * 0.9) * 0.02;
+      const bHue = (i * 55 + t * 8) % 360;
+      ctx.fillStyle = hsl(bHue, 70, 60, bAlpha);
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+    }
     ctx.restore();
 
-    // Crystals
-    for (const cr of state.crystals) {
-      const bob = Math.sin(t * 1.2 + cr.phase) * S * 0.008;
-      const glow = 0.4 + Math.sin(t * 1.5 + cr.phase) * 0.2;
-      ctx.save(); ctx.shadowColor = hsl(cr.hue, 100, 60, 0.8); ctx.shadowBlur = cr.size * 2;
-      ctx.fillStyle = hsl(cr.hue, 80, 50, glow);
-      ctx.beginPath();
-      for (let p = 0; p < cr.pts; p++) {
-        const a = (p / cr.pts) * Math.PI * 2 - Math.PI / 2;
-        const r = (p % 2 === 0) ? cr.size : cr.size * 0.55;
-        const px = cr.x + Math.cos(a) * r; const py = cr.y + bob + Math.sin(a) * r;
-        if (p === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.closePath(); ctx.fill();
-      const ig = ctx.createRadialGradient(cr.x, cr.y + bob, 0, cr.x, cr.y + bob, cr.size * 0.5);
-      ig.addColorStop(0, hsl(cr.hue, 100, 85, 0.7)); ig.addColorStop(1, hsl(cr.hue, 100, 60, 0));
-      ctx.fillStyle = ig; ctx.beginPath(); ctx.arc(cr.x, cr.y + bob, cr.size * 0.5, 0, Math.PI * 2); ctx.fill();
+    // Update & draw sparkles
+    for (let i = state.sparkles.length - 1; i >= 0; i--) {
+      const sp = state.sparkles[i];
+      sp.x += sp.vx; sp.y += sp.vy; sp.rot += 0.03; sp.life++;
+      if (sp.life >= sp.maxLife) { state.sparkles.splice(i, 1); continue; }
+      const alpha = sp.life < 10 ? sp.life / 10 : Math.max(0, 1 - (sp.life - sp.maxLife * 0.5) / (sp.maxLife * 0.5));
+      const sz = sp.size * (1 - sp.life / sp.maxLife * 0.4);
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.7;
+      ctx.fillStyle = hsl(sp.hue, 90, 75);
+      ctx.shadowColor = hsl(sp.hue, 100, 70, 0.8);
+      ctx.shadowBlur = sz * 4;
+      if (sp.type === 'star') { drawStar(sp.x, sp.y, sz, sp.rot); ctx.fill(); }
+      else if (sp.type === 'heart') { drawHeart(sp.x, sp.y, sz); ctx.fill(); }
+      else { ctx.beginPath(); ctx.arc(sp.x, sp.y, sz * 0.5, 0, Math.PI * 2); ctx.fill(); }
       ctx.restore();
     }
 
-    // Coins
-    for (const coin of state.coins) {
-      const bob = Math.sin(t * coin.speed + coin.phase) * S * 0.012;
-      const sq = 0.4 + Math.abs(Math.sin(t * coin.speed * 0.8 + coin.phase)) * 0.6;
-      ctx.save(); ctx.shadowColor = '#ffd700'; ctx.shadowBlur = coin.size * 1.5;
-      ctx.fillStyle = '#ffd700'; ctx.beginPath();
-      ctx.ellipse(coin.x, coin.y + bob, coin.size * sq, coin.size, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#ffaa00'; ctx.lineWidth = coin.size * 0.15; ctx.beginPath();
-      ctx.ellipse(coin.x, coin.y + bob, coin.size * sq * 0.65, coin.size * 0.65, 0, 0, Math.PI * 2); ctx.stroke();
-      if (sq > 0.5) {
-        ctx.fillStyle = '#cc8800'; ctx.font = `bold ${Math.round(coin.size * 1.1)}px sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('$', coin.x, coin.y + bob + coin.size * 0.05);
-      }
-      ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath();
-      ctx.ellipse(coin.x - coin.size * 0.15 * sq, coin.y + bob - coin.size * 0.2, coin.size * 0.2 * sq, coin.size * 0.15, -0.3, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-    }
-
-    // Background particles
-    for (let i = state.particles.length - 1; i >= 0; i--) {
-      const p = state.particles[i]; p.x += p.vx; p.y += p.vy; p.life++;
-      if (p.life >= p.maxLife) { state.particles.splice(i, 1); continue; }
-      const alpha = 1 - p.life / p.maxLife;
-      ctx.fillStyle = hsl(p.hue, 100, 70, alpha * 0.7);
-      ctx.shadowColor = hsl(p.hue, 100, 60, alpha * 0.5); ctx.shadowBlur = p.size * 3;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 - p.life / p.maxLife * 0.5), 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.shadowBlur = 0;
-
-    // ╔═══════════════════════════════════════════════════════════╗
-    // ║   SNAKE — Viper/Dragon Stealth-Fighter Mascot           ║
-    // ╚═══════════════════════════════════════════════════════════╝
-    const SEGS = 32;
-    const snakeScale = S * 0.65;
+    // CUTE CARTOON SNAKE
+    const SEGS = 26;
+    const snakeScale = S * 0.80;
     const segLen = snakeScale / SEGS;
-    const cx = W / 2;
-    const cy = H * 0.44;
+    const snakeCx = W / 2;
+    const snakeCy = H * 0.44;
 
-    // Build aggressive S-curve path — head rears up like striking viper
-    const pts: { x: number; y: number }[] = [];
+    // Smooth curvy S-path
+    const points: { x: number; y: number }[] = [];
     for (let i = 0; i < SEGS; i++) {
       const f = i / (SEGS - 1);
-      const wave = Math.sin(f * Math.PI * 2.4 + t * 0.9) * snakeScale * 0.32;
-      const spine = (f - 0.5) * snakeScale * 0.82;
-      // Head rears upward aggressively
-      const rearUp = f < 0.12 ? (1 - f / 0.12) * snakeScale * 0.13 : 0;
-      // Angular zigzag kinks
-      const kink = ((i % 2) * 2 - 1) * snakeScale * 0.055 * Math.max(0, 1 - Math.abs(f - 0.45) * 1.6);
-      const undulate = Math.sin(t * 2.0 + f * 6) * snakeScale * 0.01;
-      pts.push({ x: cx + wave + kink + undulate, y: cy + spine - rearUp });
+      const waveX = Math.sin(f * Math.PI * 2.0 + t * 1.1) * snakeScale * 0.28;
+      const spineY = (f - 0.45) * snakeScale * 0.75;
+      const headBob = f < 0.1 ? Math.sin(t * 2.5) * S * 0.015 * (1 - f / 0.1) : 0;
+      const breathe = Math.sin(t * 1.8 + f * 4) * snakeScale * 0.008;
+      points.push({ x: snakeCx + waveX + breathe, y: snakeCy + spineY + headBob });
     }
 
-    // Per-segment info (angle, thickness)
+    // Per-segment info
     const seg: { x: number; y: number; a: number; w: number }[] = [];
     for (let i = 0; i < SEGS; i++) {
-      const nx = pts[Math.min(i + 1, SEGS - 1)];
-      const pv = pts[Math.max(i - 1, 0)];
+      const nx = points[Math.min(i + 1, SEGS - 1)];
+      const pv = points[Math.max(i - 1, 0)];
       const a = Math.atan2(nx.y - pv.y, nx.x - pv.x);
       const f = i / (SEGS - 1);
       let w: number;
-      if (f < 0.05) w = lerp(0.6, 1.0, f / 0.05);
-      else if (f < 0.18) w = 1.0;
-      else w = lerp(1.0, 0.08, (f - 0.18) / 0.82);
-      w *= segLen * 1.0;
-      seg.push({ ...pts[i], a, w });
+      if (f < 0.06) w = lerp(0.65, 1.0, f / 0.06);
+      else if (f < 0.20) w = 1.0;
+      else w = lerp(1.0, 0.15, (f - 0.20) / 0.80);
+      w *= segLen * 1.1;
+      seg.push({ ...points[i], a, w });
     }
 
-    // ── Neon energy aura (pulsing orange glow behind body) ──
+    // Cute glow behind body
     ctx.save();
-    ctx.globalAlpha = 0.20 + Math.sin(t * 2.5) * 0.06;
+    ctx.globalAlpha = 0.12;
     for (let i = 0; i < SEGS; i += 2) {
       const s = seg[i];
-      const r = s.w * (3.0 + Math.sin(t * 3 + i * 0.5) * 0.5);
-      const g = ctx.createRadialGradient(s.x, s.y, s.w * 0.2, s.x, s.y, r);
-      g.addColorStop(0, 'rgba(255,100,0,0.30)');
-      g.addColorStop(0.6, 'rgba(255,60,0,0.08)');
-      g.addColorStop(1, 'rgba(255,40,0,0)');
+      const r = s.w * 4;
+      const g = ctx.createRadialGradient(s.x, s.y, s.w * 0.3, s.x, s.y, r);
+      g.addColorStop(0, 'rgba(100,255,150,0.3)');
+      g.addColorStop(0.5, 'rgba(255,200,50,0.1)');
+      g.addColorStop(1, 'rgba(255,100,200,0)');
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1; ctx.restore();
 
-    // ── Speed trail streaks ──
-    ctx.save();
-    for (let i = Math.floor(SEGS * 0.3); i < SEGS; i += 2) {
-      const s = seg[i]; const f = i / SEGS;
-      const len = s.w * (3 + f * 6);
-      ctx.strokeStyle = hsl(20, 100, 60, (1 - f) * 0.35);
-      ctx.lineWidth = s.w * 0.3; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(s.x, s.y);
-      ctx.lineTo(s.x - Math.cos(s.a) * len, s.y - Math.sin(s.a) * len);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // ── Tail trail particles ──
+    // Tail sparkle trail
     const tailSeg = seg[SEGS - 1];
-    if (Math.random() < 0.55) {
-      state.particles.push({
+    if (Math.random() < 0.4) {
+      const trailTypes: Array<'star' | 'heart' | 'circle'> = ['star', 'circle', 'star'];
+      state.sparkles.push({
         x: tailSeg.x + (Math.random() - 0.5) * tailSeg.w * 3,
-        y: tailSeg.y + (Math.random() - 0.5) * tailSeg.w,
-        vx: -Math.cos(tailSeg.a) * 1.6 + (Math.random() - 0.5),
-        vy: -Math.sin(tailSeg.a) * 1.6 + (Math.random() - 0.5),
-        life: 0, maxLife: 22 + Math.random() * 25, size: S * (0.003 + Math.random() * 0.005), hue: 25,
+        y: tailSeg.y + (Math.random() - 0.5) * tailSeg.w * 2,
+        vx: -Math.cos(tailSeg.a) * 1.0 + (Math.random() - 0.5) * 0.5,
+        vy: -Math.sin(tailSeg.a) * 1.0 + (Math.random() - 0.5) * 0.5,
+        life: 0, maxLife: 30 + Math.random() * 20,
+        size: S * (0.006 + Math.random() * 0.008), hue: 60,
+        type: trailTypes[Math.floor(Math.random() * trailTypes.length)],
+        rot: Math.random() * Math.PI * 2,
       });
     }
 
-    // ── BODY: Overlapping rhombus armor plates (back→front) ──
+    // BODY SEGMENTS — candy colored
+    const candyColors = [
+      { h: 130, s: 85, l: 52 },
+      { h: 55, s: 95, l: 55 },
+      { h: 170, s: 80, l: 50 },
+      { h: 40, s: 95, l: 55 },
+      { h: 130, s: 85, l: 52 },
+      { h: 320, s: 75, l: 60 },
+    ];
+
     for (let i = SEGS - 1; i >= 1; i--) {
       const s = seg[i]; const w = s.w;
-      if (w < 0.4) continue;
-      const isCyan = i % 2 === 0;
-      const hue = isCyan ? 185 : 14;
-      const sat = 100;
-      const lit = isCyan ? 50 : 54;
+      if (w < 0.5) continue;
+      const cc = candyColors[i % candyColors.length];
+      const bounce = 1 + Math.sin(t * 3 + i * 0.6) * 0.04;
+      const bw = w * bounce;
 
       ctx.save();
       ctx.translate(s.x, s.y);
-      ctx.rotate(s.a);
+      ctx.shadowColor = hsl(cc.h, 100, 65, 0.6);
+      ctx.shadowBlur = bw * 2;
 
-      // Glow per segment
-      ctx.shadowColor = hsl(hue, 100, 60, 0.85);
-      ctx.shadowBlur = w * 2.0;
+      // Dark outline
+      ctx.fillStyle = hsl(cc.h, cc.s - 10, cc.l - 25);
+      ctx.beginPath(); ctx.arc(0, 0, bw * 1.15, 0, Math.PI * 2); ctx.fill();
 
-      // Rhombus / arrow-plate shape (pointed front & back, wide sides)
-      const pFront = w * 1.15; // front point length
-      const pBack = w * 0.85;  // back indent length
-      const pSide = w * 1.0;   // side width
+      // Main fill gradient
+      const bg = ctx.createRadialGradient(-bw * 0.25, -bw * 0.3, bw * 0.1, 0, 0, bw);
+      bg.addColorStop(0, hsl(cc.h, cc.s, cc.l + 25));
+      bg.addColorStop(0.4, hsl(cc.h, cc.s, cc.l + 8));
+      bg.addColorStop(0.8, hsl(cc.h, cc.s, cc.l));
+      bg.addColorStop(1, hsl(cc.h, cc.s - 5, cc.l - 8));
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(0, 0, bw, 0, Math.PI * 2); ctx.fill();
 
-      // Dark outline plate (slightly bigger)
-      const oScale = 1.2;
-      ctx.fillStyle = '#06061a';
+      // Shiny highlight
+      ctx.fillStyle = `rgba(255,255,255,${0.25 + Math.sin(t * 2 + i * 0.8) * 0.08})`;
       ctx.beginPath();
-      ctx.moveTo(pFront * oScale, 0);
-      ctx.lineTo(0, -pSide * oScale);
-      ctx.lineTo(-pBack * oScale, 0);
-      ctx.lineTo(0, pSide * oScale);
-      ctx.closePath(); ctx.fill();
-
-      // Gradient fill plate
-      const pg = ctx.createLinearGradient(-pBack, -pSide, pFront, pSide);
-      pg.addColorStop(0, hsl(hue, sat, lit - 15));
-      pg.addColorStop(0.3, hsl(hue, sat, lit));
-      pg.addColorStop(0.6, hsl(hue, sat, lit + 20));
-      pg.addColorStop(1, hsl(hue, sat, lit));
-      ctx.fillStyle = pg;
-      ctx.beginPath();
-      ctx.moveTo(pFront, 0);
-      ctx.lineTo(0, -pSide);
-      ctx.lineTo(-pBack, 0);
-      ctx.lineTo(0, pSide);
-      ctx.closePath(); ctx.fill();
-
-      // Top facet highlight (hard edge)
-      ctx.fillStyle = hsl(hue, 100, 90, 0.22);
-      ctx.beginPath();
-      ctx.moveTo(pFront * 0.9, 0);
-      ctx.lineTo(pFront * 0.15, -pSide * 0.85);
-      ctx.lineTo(-pBack * 0.2, -pSide * 0.3);
-      ctx.lineTo(pFront * 0.35, 0);
-      ctx.closePath(); ctx.fill();
-
-      // Neon edge line (bottom edge glow)
-      ctx.strokeStyle = hsl(hue, 100, 75, 0.45 + Math.sin(t * 3 + i) * 0.15);
-      ctx.lineWidth = w * 0.06;
-      ctx.beginPath();
-      ctx.moveTo(pFront * 0.7, 0);
-      ctx.lineTo(0, pSide * 0.9);
-      ctx.lineTo(-pBack * 0.6, 0);
-      ctx.stroke();
-
-      // Energy vein pulse on every 4th segment
-      if (i % 4 === 0 && i > 2 && i < SEGS - 3) {
-        ctx.strokeStyle = hsl(45, 100, 80, 0.55 + Math.sin(t * 4.5 + i) * 0.3);
-        ctx.lineWidth = w * 0.09; ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(-pBack * 0.3, 0);
-        ctx.lineTo(pFront * 0.5, 0);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
-    // ╔═══════════════════════════════════════════════════════════╗
-    // ║  HEAD — Viper Arrowhead / Stealth Fighter               ║
-    // ║  Flat top, razor snout, angular jaw — ZERO curves        ║
-    // ╚═══════════════════════════════════════════════════════════╝
-    const hd = seg[0];
-    const HR = hd.w * 3.2; // BIG head relative to body
-    const hx = hd.x; const hy = hd.y; const hAng = hd.a;
-
-    ctx.save();
-    ctx.translate(hx, hy);
-    ctx.rotate(hAng);
-
-    // ── Head glow ──
-    ctx.shadowColor = '#00eeff';
-    ctx.shadowBlur = HR * 1.8;
-
-    // ── Arrowhead outline (thick dark border) ──
-    ctx.fillStyle = '#05051a';
-    ctx.lineJoin = 'miter';
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.45, 0);                 // Razor tip (extremely sharp)
-    ctx.lineTo(HR * 0.50, -HR * 0.88);        // Upper blade edge
-    ctx.lineTo(-HR * 0.10, -HR * 0.92);       // Top ridge
-    ctx.lineTo(-HR * 0.70, -HR * 0.55);       // Back-top notch
-    ctx.lineTo(-HR * 0.95, -HR * 0.20);       // Neck join top
-    ctx.lineTo(-HR * 1.0, 0);                 // Nape center
-    ctx.lineTo(-HR * 0.95, HR * 0.20);        // Neck join bottom
-    ctx.lineTo(-HR * 0.70, HR * 0.55);        // Back-bottom notch
-    ctx.lineTo(-HR * 0.10, HR * 0.92);        // Bottom ridge
-    ctx.lineTo(HR * 0.50, HR * 0.88);         // Lower blade edge
-    ctx.closePath();
-    ctx.fill();
-
-    // ── Head fill — multi-tone gradient ──
-    const hGrd = ctx.createLinearGradient(-HR * 0.8, -HR * 0.7, HR * 1.2, HR * 0.5);
-    hGrd.addColorStop(0, '#004466');
-    hGrd.addColorStop(0.25, '#0099aa');
-    hGrd.addColorStop(0.5, '#22ddee');
-    hGrd.addColorStop(0.7, '#55ffff');
-    hGrd.addColorStop(1, '#0088aa');
-    ctx.fillStyle = hGrd;
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.35, 0);
-    ctx.lineTo(HR * 0.45, -HR * 0.80);
-    ctx.lineTo(-HR * 0.08, -HR * 0.84);
-    ctx.lineTo(-HR * 0.65, -HR * 0.48);
-    ctx.lineTo(-HR * 0.88, -HR * 0.17);
-    ctx.lineTo(-HR * 0.92, 0);
-    ctx.lineTo(-HR * 0.88, HR * 0.17);
-    ctx.lineTo(-HR * 0.65, HR * 0.48);
-    ctx.lineTo(-HR * 0.08, HR * 0.84);
-    ctx.lineTo(HR * 0.45, HR * 0.80);
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    // ── Top facet specular (flat angular highlight) ──
-    ctx.fillStyle = 'rgba(180,255,255,0.18)';
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.2, 0);
-    ctx.lineTo(HR * 0.38, -HR * 0.72);
-    ctx.lineTo(-HR * 0.55, -HR * 0.38);
-    ctx.lineTo(HR * 0.05, -HR * 0.05);
-    ctx.closePath(); ctx.fill();
-
-    // ── Center ridge line (viper crease) ──
-    ctx.strokeStyle = 'rgba(0,255,255,0.35)';
-    ctx.lineWidth = HR * 0.04; ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.25, 0);
-    ctx.lineTo(-HR * 0.7, 0);
-    ctx.stroke();
-
-    // ── Side armor lines ──
-    ctx.strokeStyle = 'rgba(0,200,255,0.20)';
-    ctx.lineWidth = HR * 0.025;
-    for (const sd of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(HR * 0.9, HR * 0.12 * sd);
-      ctx.lineTo(HR * 0.35, HR * 0.65 * sd);
-      ctx.lineTo(-HR * 0.3, HR * 0.7 * sd);
-      ctx.stroke();
-    }
-
-    // ── Nostrils (V-shaped slits at tip) ──
-    ctx.fillStyle = '#002244';
-    for (const sd of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(HR * 1.15, HR * 0.02 * sd);
-      ctx.lineTo(HR * 1.05, HR * 0.12 * sd);
-      ctx.lineTo(HR * 0.95, HR * 0.05 * sd);
-      ctx.closePath(); ctx.fill();
-    }
-
-    // ╔═══════════════════════════════════════════════╗
-    // ║  EYES — Huge .io cartoon style, angry look   ║
-    // ╚═══════════════════════════════════════════════╝
-    for (const sd of [-1, 1]) {
-      const eX = HR * 0.08;
-      const eY = HR * 0.42 * sd;
-      const eW = HR * 0.40;
-      const eH = HR * 0.34;
-
-      // ── Heavy angular eyebrow (competitive/angry) ──
-      ctx.save();
-      ctx.strokeStyle = '#05051a';
-      ctx.lineWidth = HR * 0.13;
-      ctx.lineCap = 'square';
-      ctx.beginPath();
-      // Brow angles DOWN toward center → angry expression
-      const browInnerY = eY - eH * 0.55 * sd;
-      const browOuterY = eY - eH * 1.3 * sd;
-      ctx.moveTo(eX + eW * 0.9, browOuterY);
-      ctx.lineTo(eX - eW * 0.55, browInnerY);
-      ctx.stroke();
-      // Bright neon accent on brow
-      ctx.strokeStyle = hsl(185, 100, 60, 0.5);
-      ctx.lineWidth = HR * 0.035;
-      ctx.beginPath();
-      ctx.moveTo(eX + eW * 0.85, browOuterY);
-      ctx.lineTo(eX - eW * 0.45, browInnerY);
-      ctx.stroke();
-      ctx.restore();
-
-      // ── Eye socket shadow ──
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
-      ctx.beginPath();
-      ctx.moveTo(eX + eW * 0.95 + 2, eY + 2 * sd);
-      ctx.lineTo(eX + eW * 0.35, eY - eH * 0.92 + 2 * sd);
-      ctx.lineTo(eX - eW * 0.62, eY - eH * 0.55 + 2 * sd);
-      ctx.lineTo(eX - eW * 0.72, eY + eH * 0.15 * sd);
-      ctx.lineTo(eX - eW * 0.48, eY + eH * 0.82 + 2 * sd);
-      ctx.lineTo(eX + eW * 0.45, eY + eH * 0.88 + 2 * sd);
-      ctx.closePath(); ctx.fill();
-
-      // ── Eye white — angular polygon (aggressive kite shape) ──
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.moveTo(eX + eW * 0.95, eY);                    // Right sharp point
-      ctx.lineTo(eX + eW * 0.35, eY - eH * 0.92);       // Top-right
-      ctx.lineTo(eX - eW * 0.62, eY - eH * 0.55);       // Top-left (narrow)
-      ctx.lineTo(eX - eW * 0.72, eY + eH * 0.15 * sd);  // Left point
-      ctx.lineTo(eX - eW * 0.48, eY + eH * 0.82);       // Bottom-left
-      ctx.lineTo(eX + eW * 0.45, eY + eH * 0.88);       // Bottom-right
-      ctx.closePath();
+      ctx.ellipse(-bw * 0.25, -bw * 0.3, bw * 0.35, bw * 0.25, -0.4, 0, Math.PI * 2);
       ctx.fill();
 
-      // Eye outline (thick)
-      ctx.strokeStyle = '#05051a';
-      ctx.lineWidth = HR * 0.06;
-      ctx.lineJoin = 'miter';
-      ctx.stroke();
+      // Belly dot
+      if (i % 3 === 1) {
+        ctx.fillStyle = hsl(cc.h, cc.s, cc.l + 18, 0.4);
+        ctx.beginPath(); ctx.arc(bw * 0.15, bw * 0.1, bw * 0.2, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
 
-      // ── Iris (large, vivid green-cyan) ──
-      const iR = eW * 0.45;
-      const look = Math.sin(t * 0.6) * HR * 0.04;
-      const iX = eX + HR * 0.1 + look;
-      const iY = eY;
-      const ig = ctx.createRadialGradient(iX - iR * 0.2, iY - iR * 0.2, iR * 0.08, iX, iY, iR);
-      ig.addColorStop(0, '#44ffcc');
-      ig.addColorStop(0.35, '#00cc88');
-      ig.addColorStop(0.7, '#007755');
-      ig.addColorStop(1, '#003322');
-      ctx.fillStyle = ig;
+    // HEAD — Big round cute cartoon head
+    const hd = seg[0];
+    const headBounce = 1 + Math.sin(t * 2.5) * 0.03;
+    const HR = hd.w * 3.5 * headBounce;
+    const headX = hd.x;
+    const headY = hd.y;
+    const hAng = hd.a;
+
+    ctx.save();
+    ctx.translate(headX, headY);
+    ctx.rotate(hAng);
+
+    ctx.shadowColor = '#44ff88';
+    ctx.shadowBlur = HR * 2;
+
+    // Head outline
+    ctx.fillStyle = '#1a6633';
+    ctx.beginPath(); ctx.arc(0, 0, HR * 1.08, 0, Math.PI * 2); ctx.fill();
+
+    // Head fill
+    const hGrd = ctx.createRadialGradient(-HR * 0.2, -HR * 0.25, HR * 0.1, 0, 0, HR);
+    hGrd.addColorStop(0, '#88ffaa'); hGrd.addColorStop(0.3, '#55ee77');
+    hGrd.addColorStop(0.6, '#33cc55'); hGrd.addColorStop(1, '#22aa44');
+    ctx.fillStyle = hGrd;
+    ctx.beginPath(); ctx.arc(0, 0, HR, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Head shine
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(-HR * 0.15, -HR * 0.35, HR * 0.55, HR * 0.35, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Snout
+    const snoutGrd = ctx.createRadialGradient(HR * 0.55, 0, HR * 0.05, HR * 0.45, 0, HR * 0.42);
+    snoutGrd.addColorStop(0, '#99ffbb'); snoutGrd.addColorStop(0.6, '#55ee77'); snoutGrd.addColorStop(1, '#33cc55');
+    ctx.fillStyle = snoutGrd;
+    ctx.beginPath(); ctx.ellipse(HR * 0.5, 0, HR * 0.42, HR * 0.52, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.ellipse(HR * 0.4, -HR * 0.15, HR * 0.22, HR * 0.14, -0.3, 0, Math.PI * 2); ctx.fill();
+
+    // Nostrils
+    for (const sd of [-1, 1]) {
+      ctx.fillStyle = '#1a7733';
+      ctx.beginPath(); ctx.ellipse(HR * 0.78, HR * 0.12 * sd, HR * 0.065, HR * 0.05, 0.1 * sd, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath(); ctx.arc(HR * 0.77, HR * 0.11 * sd - HR * 0.01, HR * 0.02, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // EYES — Enormous sparkling cartoon eyes
+    for (const sd of [-1, 1]) {
+      const eX = HR * 0.15;
+      const eY = HR * 0.42 * sd;
+      const eR = HR * 0.38;
+
+      // Eye shadow
+      ctx.fillStyle = 'rgba(0,60,20,0.2)';
+      ctx.beginPath(); ctx.ellipse(eX + 2, eY + 3 * sd, eR * 1.12, eR * 1.08, 0, 0, Math.PI * 2); ctx.fill();
+
+      // Eye white
+      const ewGrad = ctx.createRadialGradient(eX - eR * 0.15, eY - eR * 0.15 * sd, eR * 0.1, eX, eY, eR);
+      ewGrad.addColorStop(0, '#ffffff'); ewGrad.addColorStop(0.7, '#f5f5f5'); ewGrad.addColorStop(1, '#e0e0e0');
+      ctx.fillStyle = ewGrad;
+      ctx.beginPath(); ctx.arc(eX, eY, eR, 0, Math.PI * 2); ctx.fill();
+
+      // Eye outline
+      ctx.strokeStyle = '#1a5533';
+      ctx.lineWidth = HR * 0.05;
+      ctx.beginPath(); ctx.arc(eX, eY, eR, 0, Math.PI * 2); ctx.stroke();
+
+      // Iris
+      const iR = eR * 0.65;
+      const lookX = Math.sin(t * 0.5) * HR * 0.04;
+      const lookY = Math.cos(t * 0.7) * HR * 0.02;
+      const iX = eX + HR * 0.06 + lookX;
+      const iY = eY + lookY;
+
+      const iGrad = ctx.createRadialGradient(iX - iR * 0.2, iY - iR * 0.2, iR * 0.05, iX, iY, iR);
+      iGrad.addColorStop(0, '#44ffaa'); iGrad.addColorStop(0.25, '#33dd88');
+      iGrad.addColorStop(0.5, '#22aa66'); iGrad.addColorStop(0.8, '#117744'); iGrad.addColorStop(1, '#0a5533');
+      ctx.fillStyle = iGrad;
       ctx.beginPath(); ctx.arc(iX, iY, iR, 0, Math.PI * 2); ctx.fill();
 
       // Iris ring
-      ctx.strokeStyle = 'rgba(0,255,200,0.3)';
-      ctx.lineWidth = iR * 0.1;
-      ctx.beginPath(); ctx.arc(iX, iY, iR * 0.85, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(100,255,170,0.3)';
+      ctx.lineWidth = iR * 0.08;
+      ctx.beginPath(); ctx.arc(iX, iY, iR * 0.88, 0, Math.PI * 2); ctx.stroke();
 
-      // ── Slit pupil (vertical, sharp) ──
-      ctx.fillStyle = '#000';
+      // Pupil (round, cute)
+      const pR = iR * 0.45;
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(iX + HR * 0.01, iY, pR, 0, Math.PI * 2); ctx.fill();
+
+      // Big sparkle highlights
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.beginPath(); ctx.arc(eX - eR * 0.1, eY - eR * 0.25, iR * 0.32, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.70)';
+      ctx.beginPath(); ctx.arc(eX + eR * 0.22, eY + eR * 0.2, iR * 0.16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath(); ctx.arc(eX - eR * 0.25, eY + eR * 0.1, iR * 0.08, 0, Math.PI * 2); ctx.fill();
+
+      // Happy eyelid
+      const squint = Math.sin(t * 0.4) * 0.1;
+      ctx.strokeStyle = '#1a6633';
+      ctx.lineWidth = HR * 0.04;
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(iX - iR * 0.12, iY - iR * 0.9);
-      ctx.quadraticCurveTo(iX + iR * 0.12, iY, iX - iR * 0.12, iY + iR * 0.9);
-      ctx.quadraticCurveTo(iX - iR * 0.25, iY, iX - iR * 0.12, iY - iR * 0.9);
-      ctx.fill();
-
-      // ── Eye highlights ──
-      ctx.fillStyle = 'rgba(255,255,255,0.90)';
-      ctx.beginPath();
-      ctx.moveTo(eX - eW * 0.12, eY - eH * 0.35);
-      ctx.lineTo(eX + eW * 0.05, eY - eH * 0.45);
-      ctx.lineTo(eX + eW * 0.12, eY - eH * 0.15);
-      ctx.closePath(); ctx.fill();
-
-      ctx.fillStyle = 'rgba(255,255,255,0.50)';
-      ctx.beginPath(); ctx.arc(eX + eW * 0.25, eY + eH * 0.22, iR * 0.14, 0, Math.PI * 2); ctx.fill();
-    }
-
-    // ╔══════════════════════════════════════╗
-    // ║  MOUTH — Wide aggressive smirk      ║
-    // ╚══════════════════════════════════════╝
-    // Mouth opening (dark angular shape)
-    ctx.fillStyle = '#0a0018';
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.30, 0);                 // Front tip
-    ctx.lineTo(HR * 0.65, -HR * 0.28);        // Upper lip front
-    ctx.lineTo(HR * 0.10, -HR * 0.18);        // Upper lip back
-    ctx.lineTo(-HR * 0.10, -HR * 0.06);       // Corner top
-    ctx.lineTo(-HR * 0.10, HR * 0.06);        // Corner bottom
-    ctx.lineTo(HR * 0.10, HR * 0.18);         // Lower lip back
-    ctx.lineTo(HR * 0.65, HR * 0.28);         // Lower lip front
-    ctx.closePath(); ctx.fill();
-
-    // Gums / inner mouth gradient
-    const mGrd = ctx.createLinearGradient(HR * -0.1, 0, HR * 1.0, 0);
-    mGrd.addColorStop(0, '#330022');
-    mGrd.addColorStop(0.5, '#550033');
-    mGrd.addColorStop(1, '#220011');
-    ctx.fillStyle = mGrd;
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.15, 0);
-    ctx.lineTo(HR * 0.60, -HR * 0.22);
-    ctx.lineTo(HR * 0.08, -HR * 0.14);
-    ctx.lineTo(-HR * 0.05, 0);
-    ctx.lineTo(HR * 0.08, HR * 0.14);
-    ctx.lineTo(HR * 0.60, HR * 0.22);
-    ctx.closePath(); ctx.fill();
-
-    // Sharp fangs (top jaw)
-    ctx.fillStyle = '#ffffff';
-    const fangs = [
-      { x: HR * 1.10, spread: HR * 0.04, h: HR * 0.14 },
-      { x: HR * 0.88, spread: HR * 0.06, h: HR * 0.18 },
-      { x: HR * 0.65, spread: HR * 0.05, h: HR * 0.15 },
-      { x: HR * 0.42, spread: HR * 0.04, h: HR * 0.11 },
-      { x: HR * 0.22, spread: HR * 0.03, h: HR * 0.08 },
-    ];
-    for (const f of fangs) {
-      // Top fang
-      ctx.beginPath();
-      ctx.moveTo(f.x - f.spread, -HR * 0.04);
-      ctx.lineTo(f.x, f.h);
-      ctx.lineTo(f.x + f.spread, -HR * 0.04);
-      ctx.closePath(); ctx.fill();
-      // Bottom fang (mirror, shorter)
-      ctx.beginPath();
-      ctx.moveTo(f.x - f.spread * 0.85, HR * 0.03);
-      ctx.lineTo(f.x, -f.h * 0.65);
-      ctx.lineTo(f.x + f.spread * 0.85, HR * 0.03);
-      ctx.closePath(); ctx.fill();
-    }
-
-    // Mouth outline (hard angular line)
-    ctx.strokeStyle = '#05051a';
-    ctx.lineWidth = HR * 0.06;
-    ctx.lineJoin = 'miter';
-    ctx.beginPath();
-    ctx.moveTo(HR * 1.30, 0);
-    ctx.lineTo(HR * 0.65, -HR * 0.28);
-    ctx.lineTo(HR * 0.10, -HR * 0.18);
-    ctx.lineTo(-HR * 0.10, -HR * 0.06);
-    ctx.lineTo(-HR * 0.10, HR * 0.06);
-    ctx.lineTo(HR * 0.10, HR * 0.18);
-    ctx.lineTo(HR * 0.65, HR * 0.28);
-    ctx.closePath(); ctx.stroke();
-
-    // ── Forked tongue ──
-    const tPhase = Math.sin(t * 2.8) * 0.5 + 0.5;
-    if (tPhase > 0.4) {
-      const tF = (tPhase - 0.4) / 0.6;
-      const tLen = HR * (0.35 + tF * 0.55);
-      ctx.strokeStyle = '#ff2266';
-      ctx.lineWidth = HR * 0.045; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(HR * 1.35, 0);
-      ctx.lineTo(HR * 1.35 + tLen, 0);
+      ctx.arc(eX, eY, eR * 1.02, Math.PI * (-0.7 + squint) * sd, Math.PI * (-0.3 - squint) * sd, sd > 0);
       ctx.stroke();
-      ctx.lineWidth = HR * 0.03;
-      ctx.beginPath(); ctx.moveTo(HR * 1.35 + tLen, 0);
-      ctx.lineTo(HR * 1.35 + tLen + HR * 0.18, -HR * 0.12); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(HR * 1.35 + tLen, 0);
-      ctx.lineTo(HR * 1.35 + tLen + HR * 0.18, HR * 0.12); ctx.stroke();
     }
 
-    // ── Cheek scale accents ──
-    ctx.strokeStyle = 'rgba(0,200,255,0.20)';
-    ctx.lineWidth = HR * 0.02;
+    // Rosy cheeks
     for (const sd of [-1, 1]) {
-      for (let sc = 0; sc < 3; sc++) {
-        const sx = HR * (-0.1 + sc * 0.22);
-        const sy = HR * (0.55 + sc * 0.05) * sd;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + HR * 0.12, sy + HR * 0.08 * sd);
-        ctx.lineTo(sx + HR * 0.06, sy + HR * 0.14 * sd);
-        ctx.stroke();
-      }
+      const chX = HR * -0.05;
+      const chY = HR * 0.68 * sd;
+      ctx.fillStyle = 'rgba(255,120,150,0.30)';
+      ctx.beginPath(); ctx.ellipse(chX, chY, HR * 0.2, HR * 0.13, 0.1 * sd, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,180,200,0.20)';
+      ctx.beginPath(); ctx.arc(chX - HR * 0.05, chY - HR * 0.03, HR * 0.05, 0, Math.PI * 2); ctx.fill();
     }
+
+    // Happy smile
+    ctx.strokeStyle = '#1a5533';
+    ctx.lineWidth = HR * 0.07;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.arc(HR * 0.45, 0, HR * 0.32, Math.PI * -0.42, Math.PI * 0.42);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#0d3322';
+    ctx.lineWidth = HR * 0.04;
+    ctx.beginPath();
+    ctx.arc(HR * 0.45, 0, HR * 0.30, Math.PI * -0.35, Math.PI * 0.35);
+    ctx.stroke();
+
+    // Tongue
+    const tongueShow = Math.sin(t * 2.0) * 0.5 + 0.5;
+    if (tongueShow > 0.3) {
+      const tScale = (tongueShow - 0.3) / 0.7;
+      ctx.fillStyle = '#ff6688';
+      ctx.beginPath();
+      ctx.ellipse(HR * 0.65, HR * 0.08, HR * 0.1 * tScale, HR * 0.14 * tScale, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,150,170,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(HR * 0.63, HR * 0.04, HR * 0.05 * tScale, HR * 0.06 * tScale, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Crown
+    ctx.save();
+    ctx.translate(-HR * 0.1, -HR * 0.85);
+    ctx.rotate(-0.25);
+    const crownH = HR * 0.35;
+    const crownW = HR * 0.45;
+
+    const crGrad = ctx.createLinearGradient(0, 0, 0, crownH);
+    crGrad.addColorStop(0, '#ffdd44'); crGrad.addColorStop(0.5, '#ffcc22'); crGrad.addColorStop(1, '#eebb00');
+    ctx.fillStyle = crGrad;
+    ctx.beginPath();
+    ctx.moveTo(-crownW * 0.5, crownH * 0.1);
+    ctx.lineTo(-crownW * 0.45, -crownH * 0.7);
+    ctx.lineTo(-crownW * 0.2, -crownH * 0.3);
+    ctx.lineTo(0, -crownH);
+    ctx.lineTo(crownW * 0.2, -crownH * 0.3);
+    ctx.lineTo(crownW * 0.45, -crownH * 0.7);
+    ctx.lineTo(crownW * 0.5, crownH * 0.1);
+    ctx.closePath(); ctx.fill();
+
+    ctx.strokeStyle = '#cc9900';
+    ctx.lineWidth = HR * 0.025;
+    ctx.stroke();
+
+    const gemColors = ['#ff4466', '#44aaff', '#44ff88'];
+    const gemPositions = [{ x: -crownW * 0.25, y: -crownH * 0.15 }, { x: 0, y: -crownH * 0.35 }, { x: crownW * 0.25, y: -crownH * 0.15 }];
+    for (let gi = 0; gi < 3; gi++) {
+      const gp = gemPositions[gi];
+      ctx.fillStyle = gemColors[gi];
+      ctx.shadowColor = gemColors[gi];
+      ctx.shadowBlur = HR * 0.08;
+      ctx.beginPath(); ctx.arc(gp.x, gp.y, HR * 0.04 + Math.sin(t * 3 + gi * 2) * HR * 0.008, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.beginPath(); ctx.arc(gp.x - HR * 0.01, gp.y - HR * 0.015, HR * 0.015, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
 
     ctx.restore(); // end head transform
 
-    // ── Energy sparks orbiting snake ──
+    // Floating stars around snake
     ctx.save();
-    for (let i = 0; i < 10; i++) {
-      const sT = t * 2.6 + i * 0.628;
-      const si = clamp(Math.floor(Math.abs(Math.sin(sT * 0.25 + i * 0.8)) * SEGS * 0.85), 0, SEGS - 1);
+    for (let i = 0; i < 8; i++) {
+      const sT = t * 1.5 + i * 0.785;
+      const si = clamp(Math.floor(Math.abs(Math.sin(sT * 0.3 + i * 0.8)) * SEGS * 0.7), 0, SEGS - 1);
       const s = seg[si];
-      const dist = s.w * (2.5 + Math.sin(sT * 1.5) * 0.7);
-      const angle = sT * 3.5 + i * 2.1;
+      const dist = s.w * (2.5 + Math.sin(sT * 1.2) * 0.8);
+      const angle = sT * 2.5 + i * 2.1;
       const sx = s.x + Math.cos(angle) * dist;
       const sy = s.y + Math.sin(angle) * dist;
-      const sz = S * (0.004 + Math.sin(sT * 2.5) * 0.003);
-      ctx.fillStyle = hsl(25 + i * 7, 100, 72, 0.6 + Math.sin(sT * 5) * 0.3);
-      ctx.shadowColor = '#ff7700'; ctx.shadowBlur = sz * 12;
-      // Diamond-shaped spark (not circle)
-      ctx.beginPath();
-      ctx.moveTo(sx, sy - sz * 1.5);
-      ctx.lineTo(sx + sz, sy);
-      ctx.lineTo(sx, sy + sz * 1.5);
-      ctx.lineTo(sx - sz, sy);
-      ctx.closePath(); ctx.fill();
+      const sz = S * (0.008 + Math.sin(sT * 2) * 0.004);
+      const sHue = (i * 50 + t * 20) % 360;
+      ctx.fillStyle = hsl(sHue, 80, 75, 0.5 + Math.sin(sT * 4) * 0.25);
+      ctx.shadowColor = hsl(sHue, 100, 65, 0.6);
+      ctx.shadowBlur = sz * 6;
+      drawStar(sx, sy, sz, sT * 2);
+      ctx.fill();
     }
-    ctx.shadowBlur = 0; ctx.restore();
-
-    // Floating score indicators
-    for (let i = state.scores.length - 1; i >= 0; i--) {
-      const sc = state.scores[i]; sc.x += sc.vx; sc.y += sc.vy; sc.vy *= 0.98; sc.life++;
-      if (sc.life >= sc.maxLife) { state.scores.splice(i, 1); continue; }
-      const alpha = sc.life < 10 ? sc.life / 10 : Math.max(0, 1 - (sc.life - sc.maxLife * 0.6) / (sc.maxLife * 0.4));
-      const popScale = sc.life < 8 ? 0.5 + (sc.life / 8) * 0.5 : 1;
-      const fSize = S * 0.035 * sc.scale * popScale;
-      ctx.save(); ctx.globalAlpha = clamp(alpha, 0, 1);
-      ctx.font = `900 ${Math.round(fSize)}px "Arial Black", "Impact", sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.strokeStyle = '#000000'; ctx.lineWidth = fSize * 0.18; ctx.lineJoin = 'round'; ctx.strokeText(sc.text, sc.x, sc.y);
-      ctx.fillStyle = sc.color; ctx.fillText(sc.text, sc.x, sc.y);
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillText(sc.text, sc.x, sc.y - fSize * 0.03);
-      ctx.restore();
-    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
 
     timeRef.current += 0.016;
     rafRef.current = requestAnimationFrame(render);
