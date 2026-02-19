@@ -968,119 +968,164 @@ export class GameEngine {
     ctx.strokeStyle = bodyColor;
     this.drawSmoothSnakePath(ctx, visSegs, 1.05);
 
-    // Layer 3: belly scales pattern (alternating lighter bands)
+    // Layer 3: body theme pattern (BELOW highlight, covers full body)
+    this.renderBodyTheme(ctx, player, visSegs, baseSize);
+
+    // Layer 4: belly scales pattern (alternating lighter bands)
     const patternLight = cachedLighten(bodyColor, 18);
     for (let si = 0; si < visSegs.length - 1; si += 3) {
       const s = visSegs[si];
       if (s.r < 0) continue;
-      const r = s.r * 0.45;
+      const r = s.r * 0.38;
       if (r < 1.5) continue;
-      ctx.fillStyle = patternLight + '50';
+      ctx.fillStyle = patternLight + '35';
       ctx.beginPath();
       ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // Layer 4: specular highlight strip (top-center shine)
-    ctx.strokeStyle = bodyColorLight + 'b0';
-    this.drawSmoothSnakePath(ctx, visSegs, 0.30);
-
-    // Layer 5: body theme pattern
-    this.renderBodyTheme(ctx, player, visSegs, baseSize);
+    // Layer 5: specular highlight strip (top-center shine)
+    ctx.strokeStyle = bodyColorLight + '90';
+    this.drawSmoothSnakePath(ctx, visSegs, 0.25);
 
     ctx.restore();
 
-    // === Head ===
+    // === Head — improved with snout shape and expressive features ===
     const head = segments[0];
-    const headSize = baseSize * 1.25;
+    const headSize = baseSize * 1.3;
 
     // Head glow
-    ctx.shadowColor = abilityGlow || color;
-    ctx.shadowBlur = (isLocal || player.boosting || abilityGlow) ? 14 : 0;
+    const glowActive = isLocal || player.boosting || abilityGlow;
+    if (glowActive) {
+      ctx.shadowColor = abilityGlow || color;
+      ctx.shadowBlur = 16;
+    }
 
-    // Head gradient using cached colors
-    const headLightColor = cachedLighten(bodyColor, 50);
+    // Snout-like shape: elongated ellipse in movement direction
+    const dir = player.direction;
+    const headAngle = Math.atan2(dir.y, dir.x);
+
+    ctx.save();
+    ctx.translate(head.x, head.y);
+    ctx.rotate(headAngle);
+
+    // Head gradient
+    const headLightColor = cachedLighten(bodyColor, 55);
     const headGrad = ctx.createRadialGradient(
-      head.x - headSize * 0.2, head.y - headSize * 0.2, headSize * 0.1,
-      head.x, head.y, headSize
+      -headSize * 0.15, -headSize * 0.15, headSize * 0.08,
+      0, 0, headSize * 1.1
     );
     headGrad.addColorStop(0, headLightColor);
-    headGrad.addColorStop(0.6, bodyColor);
+    headGrad.addColorStop(0.45, bodyColor);
     headGrad.addColorStop(1, bodyColorDark);
     ctx.fillStyle = headGrad;
+
+    // Rounded snout shape (wider at back, tapered toward front)
     ctx.beginPath();
-    ctx.arc(head.x, head.y, headSize, 0, Math.PI * 2);
+    ctx.ellipse(headSize * 0.1, 0, headSize * 1.05, headSize * 0.92, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // Border stroke
     ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = Math.max(1, headSize * 0.12);
+    ctx.lineWidth = Math.max(1.2, headSize * 0.1);
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Eyes — batched (2 eyes in single path per layer)
-    const dir = player.direction;
-    const eyeOffset = headSize * 0.4;
-    const perpX = -dir.y;
-    const perpY = dir.x;
-    const eyeDirOff = eyeOffset * 0.6;
-
-    const eyeX1 = head.x + dir.x * eyeDirOff + perpX * eyeOffset;
-    const eyeY1 = head.y + dir.y * eyeDirOff + perpY * eyeOffset;
-    const eyeX2 = head.x + dir.x * eyeDirOff - perpX * eyeOffset;
-    const eyeY2 = head.y + dir.y * eyeDirOff - perpY * eyeOffset;
-    const eyeR = headSize * 0.28;
-    const pupilR = headSize * 0.14;
-    const pupilOffX = dir.x * headSize * 0.1;
-    const pupilOffY = dir.y * headSize * 0.1;
-    const glintOff = headSize * 0.05;
-    const glintR = headSize * 0.06;
-
-    // White — single path, 2 arcs
-    ctx.fillStyle = '#ffffff';
+    // Nostrils (two small dots on the snout)
+    const nostrilFwd = headSize * 0.75;
+    const nostrilSep = headSize * 0.18;
+    ctx.fillStyle = bodyColorDark;
     ctx.beginPath();
-    ctx.moveTo(eyeX1 + eyeR, eyeY1); ctx.arc(eyeX1, eyeY1, eyeR, 0, Math.PI * 2);
-    ctx.moveTo(eyeX2 + eyeR, eyeY2); ctx.arc(eyeX2, eyeY2, eyeR, 0, Math.PI * 2);
+    ctx.arc(nostrilFwd, -nostrilSep, headSize * 0.055, 0, Math.PI * 2);
+    ctx.arc(nostrilFwd, nostrilSep, headSize * 0.055, 0, Math.PI * 2);
     ctx.fill();
 
-    // Pupils — single path
-    ctx.fillStyle = '#111827';
+    // Brow ridge — subtle darker arc above eyes
+    ctx.strokeStyle = bodyColorDark + '60';
+    ctx.lineWidth = headSize * 0.06;
     ctx.beginPath();
-    ctx.moveTo(eyeX1 + pupilOffX + pupilR, eyeY1 + pupilOffY);
-    ctx.arc(eyeX1 + pupilOffX, eyeY1 + pupilOffY, pupilR, 0, Math.PI * 2);
-    ctx.moveTo(eyeX2 + pupilOffX + pupilR, eyeY2 + pupilOffY);
-    ctx.arc(eyeX2 + pupilOffX, eyeY2 + pupilOffY, pupilR, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(headSize * 0.15, 0, headSize * 0.65, -Math.PI * 0.35, Math.PI * 0.35);
+    ctx.stroke();
 
-    // Glints — single path
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    // Eyes — positioned on the head, expressive
+    const eyeFwd = headSize * 0.35;
+    const eyeSep = headSize * 0.48;
+    const eyeR = headSize * 0.26;
+    const pupilR = headSize * 0.15;
+
+    // Eye whites with subtle gradient
+    for (const side of [-1, 1]) {
+      const ey = eyeSep * side;
+      // White
+      const eyeGrad = ctx.createRadialGradient(eyeFwd - eyeR * 0.15, ey - eyeR * 0.15, eyeR * 0.1, eyeFwd, ey, eyeR);
+      eyeGrad.addColorStop(0, '#ffffff');
+      eyeGrad.addColorStop(1, '#e0e0e8');
+      ctx.fillStyle = eyeGrad;
+      ctx.beginPath();
+      ctx.arc(eyeFwd, ey, eyeR, 0, Math.PI * 2);
+      ctx.fill();
+      // Eye border
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = headSize * 0.04;
+      ctx.stroke();
+
+      // Pupil (slit-style for reptile feel)
+      ctx.fillStyle = '#0a0a12';
+      ctx.beginPath();
+      ctx.ellipse(eyeFwd + headSize * 0.04, ey, pupilR * 0.45, pupilR, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner iris color ring
+      ctx.strokeStyle = player.boosting ? '#ff6600' : abilityGlow || cachedLighten(bodyColor, 40);
+      ctx.lineWidth = headSize * 0.04;
+      ctx.beginPath();
+      ctx.ellipse(eyeFwd + headSize * 0.02, ey, pupilR * 0.7, pupilR * 1.1, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Glint (2 highlights per eye for life-like look)
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.arc(eyeFwd - eyeR * 0.25, ey - eyeR * 0.25, headSize * 0.07, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.arc(eyeFwd + eyeR * 0.15, ey + eyeR * 0.2, headSize * 0.04, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Mouth line — subtle smile curve
+    ctx.strokeStyle = bodyColorDark + '70';
+    ctx.lineWidth = headSize * 0.04;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(eyeX1 - glintOff + glintR, eyeY1 - glintOff);
-    ctx.arc(eyeX1 - glintOff, eyeY1 - glintOff, glintR, 0, Math.PI * 2);
-    ctx.moveTo(eyeX2 - glintOff + glintR, eyeY2 - glintOff);
-    ctx.arc(eyeX2 - glintOff, eyeY2 - glintOff, glintR, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(headSize * 0.55, 0, headSize * 0.35, -0.5, 0.5);
+    ctx.stroke();
 
-    // Tongue
-    if (Math.sin(this.frameCount * 0.13) > 0.3) {
-      const tongueLen = headSize * 1.2;
-      const tx = head.x + dir.x * headSize;
-      const ty = head.y + dir.y * headSize;
-      const endX = tx + dir.x * tongueLen;
-      const endY = ty + dir.y * tongueLen;
-      const forkLen = tongueLen * 0.3;
-      const angle = Math.atan2(dir.y, dir.x);
+    // Tongue (forked, animated)
+    const tonguePhase = Math.sin(this.frameCount * 0.13);
+    if (tonguePhase > 0.2) {
+      const tongueExt = (tonguePhase - 0.2) / 0.8; // 0..1
+      const tongueLen = headSize * (0.8 + tongueExt * 0.6);
+      const tx = headSize * 0.95;
+      const tongueWiggle = Math.sin(this.frameCount * 0.3) * 0.15;
       ctx.strokeStyle = '#e74c3c';
-      ctx.lineWidth = Math.max(1, headSize * 0.06);
+      ctx.lineWidth = Math.max(1.2, headSize * 0.055);
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.lineTo(endX, endY);
-      ctx.moveTo(endX, endY);
-      ctx.lineTo(endX + Math.cos(angle + 0.4) * forkLen, endY + Math.sin(angle + 0.4) * forkLen);
-      ctx.moveTo(endX, endY);
-      ctx.lineTo(endX + Math.cos(angle - 0.4) * forkLen, endY + Math.sin(angle - 0.4) * forkLen);
+      ctx.moveTo(tx, 0);
+      ctx.quadraticCurveTo(tx + tongueLen * 0.5, tongueWiggle * headSize * 0.3, tx + tongueLen, 0);
+      ctx.stroke();
+      // Fork
+      const forkLen = tongueLen * 0.28;
+      ctx.beginPath();
+      ctx.moveTo(tx + tongueLen, 0);
+      ctx.lineTo(tx + tongueLen + forkLen * 0.8, -forkLen * 0.6);
+      ctx.moveTo(tx + tongueLen, 0);
+      ctx.lineTo(tx + tongueLen + forkLen * 0.8, forkLen * 0.6);
       ctx.stroke();
     }
+
+    ctx.restore(); // undo head translate+rotate
 
     // Boost effect — batched in one fill call
     if (player.boosting) {
@@ -1088,10 +1133,10 @@ export class GameEngine {
       const boostColor = ability === 'fireboost' ? '#f39c12' : color;
       ctx.fillStyle = `${boostColor}4d`;
       ctx.beginPath();
-      for (let bi = 0; bi < 3; bi++) {
-        const bx = tail.x + (Math.random() - 0.5) * 20;
-        const by = tail.y + (Math.random() - 0.5) * 20;
-        const br = baseSize * (0.4 - bi * 0.08);
+      for (let bi = 0; bi < 4; bi++) {
+        const bx = tail.x + (Math.random() - 0.5) * 22;
+        const by = tail.y + (Math.random() - 0.5) * 22;
+        const br = baseSize * (0.45 - bi * 0.08);
         ctx.moveTo(bx + br, by); ctx.arc(bx, by, br, 0, Math.PI * 2);
       }
       ctx.fill();
@@ -1640,7 +1685,7 @@ export class GameEngine {
     ctx.restore();
   }
 
-  // ── Body theme pattern rendering ───────────────────────────
+  // ── Body theme pattern rendering — full body coverage ────
   private renderBodyTheme(
     ctx: CanvasRenderingContext2D,
     player: Player,
@@ -1656,209 +1701,58 @@ export class GameEngine {
 
     switch (theme) {
       case 'stripes': {
-        // Dark diagonal stripes across body
-        const stripe = cachedDarken(color, 50);
-        ctx.strokeStyle = stripe + '70';
-        ctx.lineWidth = baseSize * 0.25;
-        ctx.lineCap = 'butt';
-        for (let i = 0; i < visSegs.length - 1; i += 4) {
+        // Dark & light alternating rings across entire body
+        const stripeDark = cachedDarken(color, 50) + '80';
+        const stripeLight = cachedLighten(color, 25) + '40';
+        for (let i = 0; i < visSegs.length; i++) {
           const s = visSegs[i];
           if (s.r < 0) continue;
-          const n = visSegs[Math.min(i + 1, visSegs.length - 1)];
-          if (n.r < 0) continue;
-          const dx = n.x - s.x;
-          const dy = n.y - s.y;
-          const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const px = -dy / len;
-          const py = dx / len;
-          const w = s.r * 0.8;
+          const phase = i % 6;
+          if (phase >= 3) continue; // every other 3 segments
+          const r = s.r * 0.85;
+          if (r < 1) continue;
+          ctx.fillStyle = phase < 2 ? stripeDark : stripeLight;
           ctx.beginPath();
-          ctx.moveTo(s.x + px * w, s.y + py * w);
-          ctx.lineTo(s.x - px * w, s.y - py * w);
-          ctx.stroke();
+          ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+          ctx.fill();
         }
         break;
       }
       case 'zigzag': {
-        // Bright zigzag line running along body center
-        const zigColor = cachedLighten(color, 40);
-        ctx.strokeStyle = zigColor + '80';
-        ctx.lineWidth = baseSize * 0.15;
+        // Bright zigzag running along both sides of body
+        const zigColor = cachedLighten(color, 45) + '80';
+        ctx.strokeStyle = zigColor;
+        ctx.lineWidth = baseSize * 0.14;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.beginPath();
-        let started = false;
-        for (let i = 0; i < visSegs.length; i++) {
-          const s = visSegs[i];
-          if (s.r < 0) { started = false; continue; }
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
-          if (n.r < 0) continue;
-          const dx = n.x - s.x;
-          const dy = n.y - s.y;
-          const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const px = -dy / len;
-          const py = dx / len;
-          const side = (i % 4 < 2) ? 1 : -1;
-          const off = s.r * 0.5 * side;
-          const ox = s.x + px * off;
-          const oy = s.y + py * off;
-          if (!started) { ctx.moveTo(ox, oy); started = true; }
-          else ctx.lineTo(ox, oy);
+        for (const sideSign of [-1, 1]) {
+          ctx.beginPath();
+          let started = false;
+          for (let i = 0; i < visSegs.length; i++) {
+            const s = visSegs[i];
+            if (s.r < 0) { started = false; continue; }
+            const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+            if (n.r < 0) continue;
+            const dx = n.x - s.x;
+            const dy = n.y - s.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const px = -dy / len;
+            const py = dx / len;
+            const side = (i % 4 < 2) ? sideSign : -sideSign;
+            const off = s.r * 0.55 * side;
+            const ox = s.x + px * off;
+            const oy = s.y + py * off;
+            if (!started) { ctx.moveTo(ox, oy); started = true; }
+            else ctx.lineTo(ox, oy);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
         break;
       }
       case 'dots': {
-        // Polka dots along body
-        const dotColor = cachedLighten(color, 60);
-        ctx.fillStyle = dotColor + '60';
-        for (let i = 2; i < visSegs.length; i += 5) {
-          const s = visSegs[i];
-          if (s.r < 0) continue;
-          const dr = s.r * 0.3;
-          if (dr < 1) continue;
-          ctx.beginPath();
-          ctx.arc(s.x, s.y, dr, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // Alternating smaller dots offset
-        const dotColor2 = cachedDarken(color, 30);
-        ctx.fillStyle = dotColor2 + '50';
-        for (let i = 4; i < visSegs.length; i += 5) {
-          const s = visSegs[i];
-          if (s.r < 0) continue;
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
-          if (n.r < 0) continue;
-          const dx = n.x - s.x;
-          const dy = n.y - s.y;
-          const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const px = -dy / len;
-          const py = dx / len;
-          const dr = s.r * 0.2;
-          if (dr < 1) continue;
-          ctx.beginPath();
-          ctx.arc(s.x + px * s.r * 0.3, s.y + py * s.r * 0.3, dr, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        break;
-      }
-      case 'galaxy': {
-        // Sparkling cosmic effect
-        const colors = ['#88ccff', '#cc88ff', '#ffffff', '#ffcc88', '#88ffcc'];
-        for (let i = 0; i < visSegs.length; i += 2) {
-          const s = visSegs[i];
-          if (s.r < 0) continue;
-          // Use a deterministic pseudo-random based on index + frameCount
-          const seed = (i * 7 + fc) % 60;
-          if (seed > 8) continue;
-          const ci = (i * 3) % colors.length;
-          const starR = s.r * (0.08 + (seed % 4) * 0.05);
-          if (starR < 0.5) continue;
-          ctx.fillStyle = colors[ci];
-          ctx.globalAlpha = 0.4 + Math.sin(fc * 0.1 + i) * 0.3;
-          ctx.beginPath();
-          ctx.arc(s.x + Math.sin(i * 2.3) * s.r * 0.3,
-                  s.y + Math.cos(i * 1.7) * s.r * 0.3,
-                  starR, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
-        break;
-      }
-      case 'flames': {
-        // Fire gradient from tail to head
-        for (let i = 0; i < visSegs.length; i += 2) {
-          const s = visSegs[i];
-          if (s.r < 0) continue;
-          const t = i / visSegs.length; // 0 = head, 1 = tail
-          if (t < 0.3) continue; // only on back half
-          const intensity = (t - 0.3) / 0.7;
-          const flicker = Math.sin(fc * 0.15 + i * 0.5) * 0.3 + 0.7;
-          const r = s.r * 0.6 * intensity * flicker;
-          if (r < 1) continue;
-          const alpha = Math.min(0.6, intensity * 0.8);
-          // Blend orange -> red toward tail
-          if (t > 0.7) {
-            ctx.fillStyle = `rgba(255,60,20,${alpha})`;
-          } else {
-            ctx.fillStyle = `rgba(255,160,30,${alpha})`;
-          }
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
-          if (n.r < 0) continue;
-          const dx = n.x - s.x;
-          const dy = n.y - s.y;
-          const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const px = -dy / len;
-          const py = dx / len;
-          const side = Math.sin(fc * 0.2 + i * 0.8);
-          ctx.beginPath();
-          ctx.arc(s.x + px * side * s.r * 0.3, s.y + py * side * s.r * 0.3, r, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        break;
-      }
-      case 'lightning': {
-        // Bright electric zigzag bolt along body
-        ctx.strokeStyle = '#ffff44';
-        ctx.lineWidth = baseSize * 0.12;
-        ctx.lineCap = 'round';
-        ctx.shadowColor = '#ffff00';
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        let boltStarted = false;
-        for (let i = 0; i < visSegs.length; i += 2) {
-          const s = visSegs[i];
-          if (s.r < 0) { boltStarted = false; continue; }
-          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
-          if (n.r < 0) continue;
-          const dx = n.x - s.x;
-          const dy = n.y - s.y;
-          const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const px = -dy / len;
-          const py = dx / len;
-          const jitter = Math.sin(fc * 0.3 + i * 1.5) * s.r * 0.45;
-          const ox = s.x + px * jitter;
-          const oy = s.y + py * jitter;
-          if (!boltStarted) { ctx.moveTo(ox, oy); boltStarted = true; }
-          else ctx.lineTo(ox, oy);
-        }
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        break;
-      }
-      case 'sakura': {
-        // Cherry blossom petals scattered on body
-        ctx.fillStyle = 'rgba(255,183,197,0.55)';
-        for (let i = 3; i < visSegs.length; i += 6) {
-          const s = visSegs[i];
-          if (s.r < 0) continue;
-          const pr = s.r * 0.35;
-          if (pr < 1.5) continue;
-          ctx.save();
-          ctx.translate(s.x, s.y);
-          ctx.rotate(fc * 0.02 + i);
-          // 5-petal flower
-          for (let p = 0; p < 5; p++) {
-            const a = (p / 5) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.ellipse(Math.cos(a) * pr * 0.5, Math.sin(a) * pr * 0.5, pr * 0.5, pr * 0.25, a, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          // Center
-          ctx.fillStyle = 'rgba(255,240,200,0.7)';
-          ctx.beginPath();
-          ctx.arc(0, 0, pr * 0.2, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = 'rgba(255,183,197,0.55)';
-          ctx.restore();
-        }
-        break;
-      }
-      case 'scales': {
-        // Overlapping dragon scale arcs
-        const scaleColor = cachedDarken(color, 25);
-        ctx.strokeStyle = scaleColor + '60';
-        ctx.lineWidth = baseSize * 0.06;
+        // Polka dots all along both sides of body
+        const dotColor1 = cachedLighten(color, 55) + '65';
+        const dotColor2 = cachedDarken(color, 30) + '55';
         for (let i = 1; i < visSegs.length; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
@@ -1866,18 +1760,208 @@ export class GameEngine {
           if (n.r < 0) continue;
           const dx = n.x - s.x;
           const dy = n.y - s.y;
-          const a = Math.atan2(dy, dx);
-          const sr = s.r * 0.55;
-          if (sr < 1.5) continue;
-          // Two half-circle arcs offset to each side
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const px = -dy / len;
+          const py = dx / len;
+          const dr = s.r * 0.25;
+          if (dr < 1) continue;
+          // Center dot
+          ctx.fillStyle = dotColor1;
           ctx.beginPath();
-          ctx.arc(s.x, s.y, sr, a - Math.PI * 0.6, a + Math.PI * 0.6);
+          ctx.arc(s.x, s.y, dr * 1.2, 0, Math.PI * 2);
+          ctx.fill();
+          // Side dots
+          if (i % 4 < 2) {
+            ctx.fillStyle = dotColor2;
+            ctx.beginPath();
+            ctx.arc(s.x + px * s.r * 0.4, s.y + py * s.r * 0.4, dr * 0.7, 0, Math.PI * 2);
+            ctx.arc(s.x - px * s.r * 0.4, s.y - py * s.r * 0.4, dr * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        break;
+      }
+      case 'galaxy': {
+        // Cosmic nebula glow covering entire body + sparkling stars
+        const nebulaColors = ['#6633cc', '#3366ff', '#cc33ff', '#3399ff'];
+        // Nebula haze along body
+        for (let i = 0; i < visSegs.length; i += 2) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const ci = ((i * 3 + 7) % nebulaColors.length);
+          const nR = s.r * (0.6 + Math.sin(fc * 0.02 + i * 0.3) * 0.2);
+          if (nR < 1) continue;
+          ctx.globalAlpha = 0.15 + Math.sin(fc * 0.03 + i * 0.5) * 0.08;
+          ctx.fillStyle = nebulaColors[ci];
+          ctx.beginPath();
+          ctx.arc(s.x + Math.sin(i * 2.3) * s.r * 0.2, s.y + Math.cos(i * 1.7) * s.r * 0.2, nR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Sparkling stars
+        const starColors = ['#ffffff', '#ffddaa', '#aaddff', '#ffaaff'];
+        for (let i = 0; i < visSegs.length; i++) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const seed = (i * 7 + fc) % 40;
+          if (seed > 5) continue;
+          const ci = (i * 3) % starColors.length;
+          const starR = s.r * (0.06 + (seed % 3) * 0.04);
+          if (starR < 0.5) continue;
+          ctx.globalAlpha = 0.5 + Math.sin(fc * 0.15 + i * 1.3) * 0.4;
+          ctx.fillStyle = starColors[ci];
+          ctx.beginPath();
+          ctx.arc(s.x + Math.sin(i * 2.3) * s.r * 0.35, s.y + Math.cos(i * 1.7) * s.r * 0.35, starR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'flames': {
+        // Fire gradient covering entire body from head to tail
+        for (let i = 0; i < visSegs.length; i++) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const t = i / visSegs.length; // 0 head → 1 tail
+          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          if (n.r < 0) continue;
+          const dx = n.x - s.x;
+          const dy = n.y - s.y;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const px = -dy / len;
+          const py = dx / len;
+          const flicker = Math.sin(fc * 0.18 + i * 0.6) * 0.3 + 0.7;
+          const intensity = 0.15 + t * 0.6;
+          const r = s.r * 0.7 * flicker;
+          if (r < 1) continue;
+          // Color shifts from yellow (head) → orange → red (tail)
+          let flameColor: string;
+          if (t < 0.3) flameColor = `rgba(255,220,50,${intensity * 0.4})`;
+          else if (t < 0.65) flameColor = `rgba(255,140,30,${intensity * 0.55})`;
+          else flameColor = `rgba(255,50,20,${intensity * 0.65})`;
+          ctx.fillStyle = flameColor;
+          const side = Math.sin(fc * 0.2 + i * 0.8);
+          ctx.beginPath();
+          ctx.arc(s.x + px * side * s.r * 0.25, s.y + py * side * s.r * 0.25, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+      }
+      case 'lightning': {
+        // Electric arcs running along both sides of entire body
+        ctx.lineCap = 'round';
+        ctx.shadowColor = '#ffff00';
+        ctx.shadowBlur = 5;
+        for (const sideSign of [-0.4, 0.4]) {
+          ctx.strokeStyle = `rgba(255,255,80,${0.5 + Math.sin(fc * 0.1) * 0.3})`;
+          ctx.lineWidth = baseSize * 0.09;
+          ctx.beginPath();
+          let boltStarted = false;
+          for (let i = 0; i < visSegs.length; i++) {
+            const s = visSegs[i];
+            if (s.r < 0) { boltStarted = false; continue; }
+            const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+            if (n.r < 0) continue;
+            const dx = n.x - s.x;
+            const dy = n.y - s.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const px = -dy / len;
+            const py = dx / len;
+            const jitter = Math.sin(fc * 0.35 + i * 1.8 + sideSign * 10) * s.r * 0.35;
+            const ox = s.x + px * (s.r * sideSign + jitter);
+            const oy = s.y + py * (s.r * sideSign + jitter);
+            if (!boltStarted) { ctx.moveTo(ox, oy); boltStarted = true; }
+            else ctx.lineTo(ox, oy);
+          }
           ctx.stroke();
         }
-        // Lighter scale highlights
-        const scaleLight = cachedLighten(color, 20);
-        ctx.strokeStyle = scaleLight + '30';
-        ctx.lineWidth = baseSize * 0.04;
+        // Bright center bolt
+        ctx.strokeStyle = '#ffffff88';
+        ctx.lineWidth = baseSize * 0.05;
+        ctx.beginPath();
+        let cs = false;
+        for (let i = 0; i < visSegs.length; i += 2) {
+          const s = visSegs[i];
+          if (s.r < 0) { cs = false; continue; }
+          const jitter = Math.sin(fc * 0.4 + i * 2.1) * s.r * 0.2;
+          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          if (n.r < 0) continue;
+          const dx = n.x - s.x;
+          const dy = n.y - s.y;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const px = -dy / len;
+          const py = dx / len;
+          if (!cs) { ctx.moveTo(s.x + px * jitter, s.y + py * jitter); cs = true; }
+          else ctx.lineTo(s.x + px * jitter, s.y + py * jitter);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        break;
+      }
+      case 'sakura': {
+        // Cherry blossom petals scattered all along body
+        for (let i = 2; i < visSegs.length; i += 3) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const pr = s.r * 0.32;
+          if (pr < 1.2) continue;
+          ctx.save();
+          ctx.translate(s.x, s.y);
+          ctx.rotate(fc * 0.015 + i * 0.8);
+          // 5-petal flower
+          ctx.fillStyle = `rgba(255,183,197,${0.4 + Math.sin(fc * 0.04 + i) * 0.15})`;
+          for (let p = 0; p < 5; p++) {
+            const a = (p / 5) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.ellipse(Math.cos(a) * pr * 0.45, Math.sin(a) * pr * 0.45, pr * 0.45, pr * 0.22, a, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // Petal center
+          ctx.fillStyle = 'rgba(255,240,200,0.65)';
+          ctx.beginPath();
+          ctx.arc(0, 0, pr * 0.18, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        // Falling petal particles along body
+        ctx.fillStyle = 'rgba(255,192,203,0.3)';
+        for (let i = 0; i < visSegs.length; i += 5) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const petalR = s.r * 0.15;
+          if (petalR < 0.8) continue;
+          const driftX = Math.sin(fc * 0.03 + i * 1.5) * s.r * 0.4;
+          const driftY = Math.cos(fc * 0.04 + i * 1.2) * s.r * 0.3;
+          ctx.beginPath();
+          ctx.ellipse(s.x + driftX, s.y + driftY, petalR, petalR * 0.5, fc * 0.02 + i, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+      }
+      case 'scales': {
+        // Overlapping dragon scales covering entire body
+        const scaleStroke = cachedDarken(color, 30) + '70';
+        const scaleFill = cachedDarken(color, 15) + '30';
+        for (let i = 1; i < visSegs.length; i++) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          if (n.r < 0) continue;
+          const dx = n.x - s.x;
+          const dy = n.y - s.y;
+          const a = Math.atan2(dy, dx);
+          const sr = s.r * 0.5;
+          if (sr < 1.2) continue;
+          // Scale arc
+          ctx.fillStyle = scaleFill;
+          ctx.strokeStyle = scaleStroke;
+          ctx.lineWidth = baseSize * 0.04;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, sr, a - Math.PI * 0.65, a + Math.PI * 0.65);
+          ctx.fill();
+          ctx.stroke();
+        }
+        // Lighter scale highlights on alternating
+        const scaleHighlight = cachedLighten(color, 20) + '25';
         for (let i = 2; i < visSegs.length; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
@@ -1886,49 +1970,69 @@ export class GameEngine {
           const dx = n.x - s.x;
           const dy = n.y - s.y;
           const a = Math.atan2(dy, dx);
-          const sr = s.r * 0.4;
-          if (sr < 1) continue;
+          const sr = s.r * 0.35;
+          if (sr < 0.8) continue;
+          ctx.fillStyle = scaleHighlight;
           ctx.beginPath();
           ctx.arc(s.x, s.y, sr, a - Math.PI * 0.4, a + Math.PI * 0.4);
-          ctx.stroke();
+          ctx.fill();
         }
         break;
       }
       case 'neon': {
-        // Pulsing bright neon outline glow
+        // Pulsing neon glow outline covering entire body
         const pulse = 0.5 + Math.sin(fc * 0.08) * 0.4;
         const neonColor = cachedLighten(color, 70);
-        ctx.strokeStyle = neonColor;
-        ctx.globalAlpha = pulse * 0.6;
         ctx.shadowColor = neonColor;
-        ctx.shadowBlur = 10;
-        this.drawSmoothSnakePath(ctx, visSegs, 1.20);
-        ctx.shadowBlur = 0;
-        // Inner glow line
+        ctx.shadowBlur = 12;
+        // Outer neon glow
+        ctx.strokeStyle = neonColor;
+        ctx.globalAlpha = pulse * 0.55;
+        this.drawSmoothSnakePath(ctx, visSegs, 1.25);
+        // Inner bright line
         ctx.strokeStyle = '#ffffff';
-        ctx.globalAlpha = pulse * 0.3;
-        this.drawSmoothSnakePath(ctx, visSegs, 0.15);
+        ctx.globalAlpha = pulse * 0.35;
+        this.drawSmoothSnakePath(ctx, visSegs, 0.18);
+        // Neon dots along body edges
+        ctx.fillStyle = neonColor;
+        ctx.globalAlpha = pulse * 0.5;
+        for (let i = 0; i < visSegs.length; i += 4) {
+          const s = visSegs[i];
+          if (s.r < 0) continue;
+          const n = i < visSegs.length - 1 ? visSegs[i + 1] : s;
+          if (n.r < 0) continue;
+          const dx = n.x - s.x;
+          const dy = n.y - s.y;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const px = -dy / len;
+          const py = dx / len;
+          const dr = s.r * 0.12;
+          ctx.beginPath();
+          ctx.arc(s.x + px * s.r * 0.8, s.y + py * s.r * 0.8, dr, 0, Math.PI * 2);
+          ctx.arc(s.x - px * s.r * 0.8, s.y - py * s.r * 0.8, dr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
         break;
       }
       case 'camo': {
-        // Camouflage: irregular blotches of varying shades
-        const camo1 = cachedDarken(color, 40);
-        const camo2 = cachedDarken(color, 20);
-        const camo3 = cachedLighten(color, 15);
+        // Camouflage blotches covering entire body
+        const camo1 = cachedDarken(color, 45) + '60';
+        const camo2 = cachedDarken(color, 20) + '50';
+        const camo3 = cachedLighten(color, 15) + '45';
         const camoColors = [camo1, camo2, camo3];
-        for (let i = 0; i < visSegs.length; i += 3) {
+        for (let i = 0; i < visSegs.length; i += 2) {
           const s = visSegs[i];
           if (s.r < 0) continue;
           const ci = ((i * 7 + 3) % camoColors.length);
-          const br = s.r * (0.3 + (((i * 13) % 10) / 10) * 0.35);
+          const br = s.r * (0.35 + (((i * 13) % 10) / 10) * 0.35);
           if (br < 1) continue;
-          ctx.fillStyle = camoColors[ci] + '55';
+          ctx.fillStyle = camoColors[ci];
+          const ox = Math.sin(i * 2.1) * s.r * 0.3;
+          const oy = Math.cos(i * 1.7) * s.r * 0.3;
           ctx.beginPath();
-          // Irregular blob shape
-          const ox = Math.sin(i * 2.1) * s.r * 0.25;
-          const oy = Math.cos(i * 1.7) * s.r * 0.25;
-          ctx.ellipse(s.x + ox, s.y + oy, br, br * 0.7, i * 0.5, 0, Math.PI * 2);
+          ctx.ellipse(s.x + ox, s.y + oy, br, br * 0.65, i * 0.5, 0, Math.PI * 2);
           ctx.fill();
         }
         break;

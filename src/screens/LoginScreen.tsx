@@ -1,22 +1,24 @@
 import { useAuthStore } from '../stores/authStore';
+import Snake3DHero from '../components/Snake3DHero';
 
 export default function LoginScreen() {
   const { signInWithGoogle, loading, error } = useAuthStore();
 
   return (
     <div className="min-h-screen min-h-[100dvh] flex items-center justify-center bg-gray-950 relative overflow-hidden px-4">
-      {/* Animated background */}
-      <div className="absolute inset-0">
-        <div className="absolute top-1/4 left-1/4 w-64 sm:w-96 h-64 sm:h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse-slow" />
-        <div className="absolute bottom-1/4 right-1/4 w-64 sm:w-96 h-64 sm:h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse-slow" style={{ animationDelay: '1.5s' }} />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] sm:w-[600px] h-[300px] sm:h-[600px] bg-purple-500/5 rounded-full blur-3xl" />
-      </div>
+      {/* ── 3D Snake Canvas (fullscreen behind everything) ── */}
+      <Snake3DHero />
+
+      {/* Subtle vignette overlay for contrast */}
+      <div className="absolute inset-0 pointer-events-none" style={{
+        background: 'radial-gradient(ellipse at center, transparent 30%, rgba(3,7,18,0.65) 80%, rgba(3,7,18,0.92) 100%)',
+      }} />
 
       {/* Grid overlay */}
       <div
-        className="absolute inset-0 opacity-10"
+        className="absolute inset-0 opacity-[0.04] pointer-events-none"
         style={{
-          backgroundImage: 'linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px)',
+          backgroundImage: 'linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px)',
           backgroundSize: '60px 60px',
         }}
       />
@@ -25,35 +27,19 @@ export default function LoginScreen() {
         {/* Logo */}
         <div className="flex flex-col items-center gap-2 sm:gap-4 animate-float">
           <div className="relative">
-            <h1 className="text-5xl sm:text-7xl md:text-8xl font-black tracking-tighter">
+            <h1 className="text-5xl sm:text-7xl md:text-8xl font-black tracking-tighter" style={{ textShadow: '0 0 40px rgba(16,185,129,0.3), 0 2px 6px rgba(0,0,0,0.5)' }}>
               <span className="text-emerald-400 glow-text">B</span>
               <span className="text-white">entropy</span>
             </h1>
-            <div className="absolute -bottom-1 sm:-bottom-2 left-0 right-0 h-0.5 sm:h-1 bg-gradient-to-r from-emerald-500 via-blue-500 to-purple-500 rounded-full" />
+            <div className="absolute -bottom-1 sm:-bottom-2 left-0 right-0 h-0.5 sm:h-1 bg-gradient-to-r from-emerald-500 via-blue-500 to-purple-500 rounded-full" style={{ boxShadow: '0 0 16px rgba(16,185,129,0.5)' }} />
           </div>
-          <p className="text-base sm:text-xl text-gray-400 font-medium tracking-widest uppercase">
+          <p className="text-base sm:text-xl text-gray-400 font-medium tracking-widest uppercase" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>
             Arena
           </p>
         </div>
 
-        {/* Snake illustration */}
-        <div className="relative w-20 h-20 sm:w-32 sm:h-32 my-2 sm:my-4">
-          <svg viewBox="0 0 100 100" className="w-full h-full">
-            <circle cx="50" cy="30" r="18" fill="#10b981" opacity="0.9">
-              <animate attributeName="cy" values="30;28;30" dur="2s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="43" cy="26" r="4" fill="white" />
-            <circle cx="57" cy="26" r="4" fill="white" />
-            <circle cx="44" cy="27" r="2" fill="#111827" />
-            <circle cx="58" cy="27" r="2" fill="#111827" />
-            <circle cx="50" cy="50" r="14" fill="#10b981" opacity="0.8" />
-            <circle cx="50" cy="68" r="12" fill="#10b981" opacity="0.7" />
-            <circle cx="50" cy="84" r="10" fill="#10b981" opacity="0.6" />
-          </svg>
-        </div>
-
         {/* Play description */}
-        <p className="text-gray-400 text-center max-w-md text-sm sm:text-lg px-2">
+        <p className="text-gray-300 text-center max-w-md text-sm sm:text-lg px-2" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.7)' }}>
           Jogo multiplayer estilo slither.io. Coma, cresça e domine a arena!
         </p>
 
@@ -61,11 +47,12 @@ export default function LoginScreen() {
         <button
           onClick={signInWithGoogle}
           disabled={loading}
-          className="group relative flex items-center gap-3 sm:gap-4 px-6 sm:px-8 py-3 sm:py-4 bg-white hover:bg-gray-100 
-                     text-gray-900 font-bold rounded-2xl transition-all duration-300 
-                     shadow-lg shadow-white/10 hover:shadow-white/20 hover:scale-105 
+          className="group relative flex items-center gap-3 sm:gap-4 px-6 sm:px-8 py-3 sm:py-4 
+                     bg-white/95 hover:bg-white text-gray-900 font-bold rounded-2xl 
+                     transition-all duration-300 
+                     shadow-lg shadow-emerald-500/15 hover:shadow-emerald-500/30 hover:scale-105 
                      active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer
-                     w-full sm:w-auto justify-center"
+                     w-full sm:w-auto justify-center backdrop-blur-sm"
         >
           {/* Google Icon */}
           <svg className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" viewBox="0 0 24 24">
@@ -82,15 +69,15 @@ export default function LoginScreen() {
 
         {/* Error message */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 sm:px-6 py-3 text-red-400 text-xs sm:text-sm max-w-md text-center">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 sm:px-6 py-3 text-red-400 text-xs sm:text-sm max-w-md text-center backdrop-blur-sm">
             {error}
           </div>
         )}
 
         {/* Footer */}
-        <div className="mt-4 sm:mt-8 flex flex-col items-center gap-1 sm:gap-2 text-gray-600 text-[10px] sm:text-sm">
-          <p>Feito com ❤️ usando React + TypeScript + Firebase</p>
-          <p>v1.0.0 — Bentropy Arena</p>
+        <div className="mt-4 sm:mt-8 flex flex-col items-center gap-1 sm:gap-2 text-gray-500 text-[10px] sm:text-sm">
+          <p style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>Feito com ❤️ usando React + TypeScript + Firebase</p>
+          <p style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>v1.0.0 — Bentropy Arena</p>
         </div>
       </div>
     </div>

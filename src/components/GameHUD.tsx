@@ -139,48 +139,68 @@ export default function GameHUD({
       )}
 
       {/* ── Leaderboard ── */}
-      {!compact && (
-        <div className="fixed z-40" style={{ top: abilityDef ? (isMobile ? 140 : 178) : (isMobile ? 76 : 108), left: isMobile ? 6 : 12, width: isMobile ? 155 : 200 }}>
-          <div style={{ background: 'rgba(8,13,26,0.88)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, padding: '10px 12px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+      <div className="fixed z-40" style={{
+        top: compact
+          ? (abilityDef ? 100 : 52)
+          : (abilityDef ? (isMobile ? 140 : 178) : (isMobile ? 76 : 108)),
+        left: compact ? 4 : (isMobile ? 6 : 12),
+        width: compact ? 130 : (isMobile ? 155 : 200),
+      }}>
+        <div style={{
+          background: compact ? 'rgba(8,13,26,0.78)' : 'rgba(8,13,26,0.88)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: compact ? 8 : 14,
+          padding: compact ? '5px 6px' : '10px 12px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        }}>
+          {!compact && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
               <span style={{ fontSize: 12 }}>🏆</span>
-              <span style={{ fontSize: 10, fontWeight: 800, color: '#10b981', letterSpacing: 2, textTransform: 'uppercase' }}>Top 10 Global</span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: '#10b981', letterSpacing: 2, textTransform: 'uppercase' }}>Top 10</span>
             </div>
-            {leaderboard.slice(0, 10).map((p, i) => {
-              const medals = ['🥇', '🥈', '🥉'];
-              const nameColors = ['#ffd700', '#c0c0c0', '#cd7f32'];
-              const isFirst = i === 0;
-              return (
-                <div key={p.name + i} style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '3px 6px', borderRadius: 8,
-                  background: p.isLocal ? 'rgba(16,185,129,0.12)' : isFirst ? 'rgba(255,215,0,0.06)' : 'transparent',
-                  border: p.isLocal ? '1px solid rgba(16,185,129,0.22)' : '1px solid transparent',
-                  fontSize: isMobile ? 10 : 12, marginBottom: 2,
-                  transition: 'background 0.2s',
+          )}
+          {compact && (
+            <div style={{ fontSize: 7, fontWeight: 700, color: '#10b981', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 2 }}>
+              🏆 Top
+            </div>
+          )}
+          {leaderboard.slice(0, compact ? 5 : 10).map((p, i) => {
+            const medals = ['🥇', '🥈', '🥉'];
+            const nameColors = ['#ffd700', '#c0c0c0', '#cd7f32'];
+            const isFirst = i === 0;
+            return (
+              <div key={p.name + i} style={{
+                display: 'flex', alignItems: 'center', gap: compact ? 3 : 6,
+                padding: compact ? '1.5px 3px' : '3px 6px',
+                borderRadius: compact ? 4 : 8,
+                background: p.isLocal ? 'rgba(16,185,129,0.12)' : isFirst ? 'rgba(255,215,0,0.06)' : 'transparent',
+                border: p.isLocal ? '1px solid rgba(16,185,129,0.22)' : '1px solid transparent',
+                fontSize: compact ? 8 : (isMobile ? 10 : 12),
+                marginBottom: compact ? 0 : 2,
+                transition: 'background 0.2s',
+              }}>
+                <span style={{ fontSize: compact ? 7 : (isMobile ? 9 : 11), minWidth: compact ? 13 : 18, textAlign: 'center', color: '#4b5563', fontWeight: 700 }}>
+                  {i < 3 ? medals[i] : `${i + 1}`}
+                </span>
+                {!compact && <div style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, flexShrink: 0, boxShadow: `0 0 6px ${p.color}60` }} />}
+                <span style={{
+                  flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  color: i < 3 ? nameColors[i] : p.isLocal ? '#fff' : '#9ca3af',
+                  fontWeight: p.isLocal || i < 3 ? 700 : 400,
+                  position: 'relative', display: 'inline-flex', alignItems: 'center',
                 }}>
-                  <span style={{ fontSize: isMobile ? 9 : 11, minWidth: 18, textAlign: 'center', color: '#4b5563', fontWeight: 700 }}>
-                    {i < 3 ? medals[i] : `${i + 1}`}
-                  </span>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, flexShrink: 0, boxShadow: `0 0 6px ${p.color}60` }} />
-                  <span style={{
-                    flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    color: i < 3 ? nameColors[i] : p.isLocal ? '#fff' : '#9ca3af',
-                    fontWeight: p.isLocal || i < 3 ? 700 : 400,
-                    position: 'relative', display: 'inline-flex', alignItems: 'center',
-                  }}>
-                    {isFirst && <span style={{ fontSize: 9, marginRight: 1, verticalAlign: 'top' }}>👑</span>}
-                    {p.name}
-                  </span>
-                  <span style={{ fontSize: isMobile ? 8 : 10, color: '#6b7280', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                    🐍 {Math.floor(p.length)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+                  {!compact && isFirst && <span style={{ fontSize: 9, marginRight: 1, verticalAlign: 'top' }}>👑</span>}
+                  {p.name}
+                </span>
+                <span style={{ fontSize: compact ? 7 : (isMobile ? 8 : 10), color: '#6b7280', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                  {compact ? Math.floor(p.length) : `🐍 ${Math.floor(p.length)}`}
+                </span>
+              </div>
+            );
+          })}
         </div>
-      )}
+      </div>
 
       {/* ── Desktop hint ── */}
       {!isMobile && (
