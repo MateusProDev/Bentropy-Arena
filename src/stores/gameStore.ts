@@ -22,6 +22,10 @@ interface GameStore {
   // Session
   gameSession: number;
 
+  // Server mode
+  serverMode: 'local' | 'online';
+  setServerMode: (mode: 'local' | 'online') => void;
+
   // Minimap
   minimapVisible: boolean;
   toggleMinimap: () => void;
@@ -54,6 +58,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   deathInfo: null,
 
   gameSession: 0,
+
+  serverMode: 'local',
+  setServerMode: (mode) => set({ serverMode: mode }),
 
   minimapVisible: true,
   toggleMinimap: () => set((s) => ({ minimapVisible: !s.minimapVisible })),

@@ -1020,9 +1020,9 @@ export class GameEngine {
     headGrad.addColorStop(1, bodyColorDark);
     ctx.fillStyle = headGrad;
 
-    // Rounded snout shape (wider at back, tapered toward front)
+    // Round head shape (slither.io / wormate.io style)
     ctx.beginPath();
-    ctx.ellipse(headSize * 0.1, 0, headSize * 1.05, headSize * 0.92, 0, 0, Math.PI * 2);
+    ctx.ellipse(headSize * 0.06, 0, headSize * 1.0, headSize * 0.95, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Border stroke
@@ -1031,27 +1031,11 @@ export class GameEngine {
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Nostrils (two small dots on the snout)
-    const nostrilFwd = headSize * 0.75;
-    const nostrilSep = headSize * 0.18;
-    ctx.fillStyle = bodyColorDark;
-    ctx.beginPath();
-    ctx.arc(nostrilFwd, -nostrilSep, headSize * 0.055, 0, Math.PI * 2);
-    ctx.arc(nostrilFwd, nostrilSep, headSize * 0.055, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Brow ridge — subtle darker arc above eyes
-    ctx.strokeStyle = bodyColorDark + '60';
-    ctx.lineWidth = headSize * 0.06;
-    ctx.beginPath();
-    ctx.arc(headSize * 0.15, 0, headSize * 0.65, -Math.PI * 0.35, Math.PI * 0.35);
-    ctx.stroke();
-
-    // Eyes — positioned on the head, expressive
-    const eyeFwd = headSize * 0.35;
-    const eyeSep = headSize * 0.48;
-    const eyeR = headSize * 0.26;
-    const pupilR = headSize * 0.15;
+    // Eyes — big round, wormate.io style
+    const eyeFwd = headSize * 0.30;
+    const eyeSep = headSize * 0.46;
+    const eyeR = headSize * 0.30;
+    const pupilR = headSize * 0.18;
 
     // Eye whites with subtle gradient
     for (const side of [-1, 1]) {
@@ -1069,27 +1053,20 @@ export class GameEngine {
       ctx.lineWidth = headSize * 0.04;
       ctx.stroke();
 
-      // Pupil (slit-style for reptile feel)
+      // Pupil — round (wormate.io / slither.io style)
       ctx.fillStyle = '#0a0a12';
       ctx.beginPath();
-      ctx.ellipse(eyeFwd + headSize * 0.04, ey, pupilR * 0.45, pupilR, 0, 0, Math.PI * 2);
+      ctx.arc(eyeFwd + headSize * 0.04, ey, pupilR, 0, Math.PI * 2);
       ctx.fill();
 
-      // Inner iris color ring
-      ctx.strokeStyle = player.boosting ? '#ff6600' : abilityGlow || cachedLighten(bodyColor, 40);
-      ctx.lineWidth = headSize * 0.04;
+      // Glint (2 highlights per eye)
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.beginPath();
-      ctx.ellipse(eyeFwd + headSize * 0.02, ey, pupilR * 0.7, pupilR * 1.1, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Glint (2 highlights per eye for life-like look)
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.beginPath();
-      ctx.arc(eyeFwd - eyeR * 0.25, ey - eyeR * 0.25, headSize * 0.07, 0, Math.PI * 2);
+      ctx.arc(eyeFwd - eyeR * 0.15, ey - eyeR * 0.2, headSize * 0.08, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.beginPath();
-      ctx.arc(eyeFwd + eyeR * 0.15, ey + eyeR * 0.2, headSize * 0.04, 0, Math.PI * 2);
+      ctx.arc(eyeFwd + eyeR * 0.15, ey + eyeR * 0.15, headSize * 0.04, 0, Math.PI * 2);
       ctx.fill();
     }
 

@@ -79,6 +79,9 @@ export default function GameScreen() {
     const engine = new GameEngine(canvasRef.current);
     engineRef.current = engine;
 
+    // Read server mode preference
+    const preferLocal = store.serverMode === 'local';
+
     // WebSocket connection
     const ws = getWSClient();
     ws.connect({
@@ -86,7 +89,7 @@ export default function GameScreen() {
       playerName: currentPlayer.name,
       photoURL: user.photoURL,
       color: currentPlayer.color,
-    });
+    }, preferLocal);
 
     // Handle state updates from server/bots
     const handleState = (msg: WSMessage) => {

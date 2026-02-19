@@ -106,7 +106,13 @@ export class WSClient {
     }
   }
 
-  public connect(joinPayload: JoinPayload): void {
+  public connect(joinPayload: JoinPayload, forceLocal = false): void {
+    // Force local mode (user chose 'Local' server)
+    if (forceLocal) {
+      this.startFallbackMode(joinPayload);
+      return;
+    }
+
     // No server URL configured → immediate fallback with local bots
     if (!this.url) {
       this.startFallbackMode(joinPayload);
