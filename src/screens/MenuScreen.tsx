@@ -13,6 +13,7 @@ export default function MenuScreen() {
   const [playerName, setPlayerName] = useState('');
   const [selectedAccessory, setSelectedAccessory] = useState<SnakeAccessory>('none');
   const [selectedTheme, setSelectedTheme] = useState<SnakeTheme>('none');
+  const [cosmeticTab, setCosmeticTab] = useState<'accessory' | 'theme'>('accessory');
 
   useEffect(() => {
     if (user) {
@@ -77,81 +78,104 @@ export default function MenuScreen() {
             </div>
           </div>
 
-          {/* Name input */}
-          <div className="mb-3 sm:mb-4">
-            <label className="text-gray-400 text-xs sm:text-sm mb-1 block">Nome no jogo</label>
-            <input
-              type="text"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value.slice(0, 16))}
-              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-white text-sm sm:text-base
-                         focus:border-emerald-500 focus:outline-none transition-colors"
-              maxLength={16}
-              placeholder="Seu nome no jogo"
-            />
-          </div>
-
-          {/* Color picker */}
-          <div className="mb-3 sm:mb-4">
-            <label className="text-gray-400 text-xs sm:text-sm mb-2 block">Cor da cobra</label>
-            <div className="flex flex-wrap gap-1.5 sm:gap-2">
-              {SNAKE_COLORS.map((color) => (
-                <button
-                  key={color}
-                  onClick={() => setSelectedColor(color)}
-                  className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full transition-all duration-200 cursor-pointer
-                    ${selectedColor === color 
-                      ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-900 scale-110' 
-                      : 'hover:scale-110 opacity-70 hover:opacity-100'
-                    }`}
-                  style={{ backgroundColor: color }}
-                />
-              ))}
+          {/* Name + Color row */}
+          <div className="flex items-end gap-3 mb-3">
+            <div className="flex-1 min-w-0">
+              <label className="text-gray-400 text-[10px] sm:text-xs mb-1 block">Nome no jogo</label>
+              <input
+                type="text"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value.slice(0, 16))}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm
+                           focus:border-emerald-500 focus:outline-none transition-colors"
+                maxLength={16}
+                placeholder="Seu nome"
+              />
+            </div>
+            <div
+              className="w-9 h-9 rounded-lg border-2 border-gray-600 flex-shrink-0 cursor-pointer relative group"
+              style={{ backgroundColor: selectedColor }}
+              title="Cor da cobra"
+            >
+              {/* Color dropdown on hover/focus */}
+              <div className="absolute bottom-full right-0 mb-2 hidden group-hover:flex group-focus-within:flex
+                              flex-wrap gap-1 p-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 w-[180px]">
+                {SNAKE_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setSelectedColor(color)}
+                    className={`w-6 h-6 rounded-full transition-all duration-150 cursor-pointer
+                      ${selectedColor === color
+                        ? 'ring-2 ring-white ring-offset-1 ring-offset-gray-900 scale-110'
+                        : 'hover:scale-110 opacity-70 hover:opacity-100'
+                      }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Accessory picker */}
-          <div className="mb-3 sm:mb-4">
-            <label className="text-gray-400 text-xs sm:text-sm mb-2 block">Acessório</label>
-            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-              {SNAKE_ACCESSORIES.map((acc) => (
-                <button
-                  key={acc.id}
-                  onClick={() => setSelectedAccessory(acc.id)}
-                  className={`flex flex-col items-center justify-center rounded-xl py-2 px-1 transition-all duration-200 cursor-pointer
-                    ${selectedAccessory === acc.id
-                      ? 'bg-emerald-500/20 ring-2 ring-emerald-400 scale-105'
-                      : 'bg-gray-800/50 hover:bg-gray-700/50 opacity-70 hover:opacity-100'
-                    }`}
-                  title={acc.name}
-                >
-                  <span className="text-xl sm:text-2xl leading-none">{acc.emoji}</span>
-                  <span className="text-[9px] sm:text-[10px] text-gray-400 mt-1 truncate w-full text-center">{acc.name}</span>
-                </button>
-              ))}
+          {/* Cosmetics tabbed section */}
+          <div className="mb-3">
+            <div className="flex gap-1 mb-2">
+              <button
+                onClick={() => setCosmeticTab('accessory')}
+                className={`flex-1 text-[10px] sm:text-xs font-medium py-1.5 rounded-lg transition-colors cursor-pointer
+                  ${cosmeticTab === 'accessory'
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
+                  }`}
+              >
+                🎭 Acessório {selectedAccessory !== 'none' && <span className="ml-1 text-emerald-300">•</span>}
+              </button>
+              <button
+                onClick={() => setCosmeticTab('theme')}
+                className={`flex-1 text-[10px] sm:text-xs font-medium py-1.5 rounded-lg transition-colors cursor-pointer
+                  ${cosmeticTab === 'theme'
+                    ? 'bg-purple-500/20 text-purple-400'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
+                  }`}
+              >
+                ✨ Tema {selectedTheme !== 'none' && <span className="ml-1 text-purple-300">•</span>}
+              </button>
             </div>
-          </div>
 
-          {/* Theme picker */}
-          <div className="mb-4 sm:mb-6">
-            <label className="text-gray-400 text-xs sm:text-sm mb-2 block">Tema do corpo</label>
-            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-              {SNAKE_THEMES.map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => setSelectedTheme(theme.id)}
-                  className={`flex flex-col items-center justify-center rounded-xl py-2 px-1 transition-all duration-200 cursor-pointer
-                    ${selectedTheme === theme.id
-                      ? 'bg-purple-500/20 ring-2 ring-purple-400 scale-105'
-                      : 'bg-gray-800/50 hover:bg-gray-700/50 opacity-70 hover:opacity-100'
-                    }`}
-                  title={theme.name}
-                >
-                  <span className="text-xl sm:text-2xl leading-none">{theme.emoji}</span>
-                  <span className="text-[9px] sm:text-[10px] text-gray-400 mt-1 truncate w-full text-center">{theme.name}</span>
-                </button>
-              ))}
-            </div>
+            {cosmeticTab === 'accessory' ? (
+              <div className="grid grid-cols-6 gap-1">
+                {SNAKE_ACCESSORIES.map((acc) => (
+                  <button
+                    key={acc.id}
+                    onClick={() => setSelectedAccessory(acc.id)}
+                    className={`flex items-center justify-center rounded-lg p-1.5 transition-all duration-150 cursor-pointer
+                      ${selectedAccessory === acc.id
+                        ? 'bg-emerald-500/20 ring-1 ring-emerald-400'
+                        : 'bg-gray-800/40 hover:bg-gray-700/50 opacity-60 hover:opacity-100'
+                      }`}
+                    title={acc.name}
+                  >
+                    <span className="text-base sm:text-lg leading-none">{acc.emoji}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-6 gap-1">
+                {SNAKE_THEMES.map((theme) => (
+                  <button
+                    key={theme.id}
+                    onClick={() => setSelectedTheme(theme.id)}
+                    className={`flex items-center justify-center rounded-lg p-1.5 transition-all duration-150 cursor-pointer
+                      ${selectedTheme === theme.id
+                        ? 'bg-purple-500/20 ring-1 ring-purple-400'
+                        : 'bg-gray-800/40 hover:bg-gray-700/50 opacity-60 hover:opacity-100'
+                      }`}
+                    title={theme.name}
+                  >
+                    <span className="text-base sm:text-lg leading-none">{theme.emoji}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Play button */}
