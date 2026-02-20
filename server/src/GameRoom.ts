@@ -6,11 +6,14 @@
 import { WebSocket } from 'ws';
 
 // ========================
-// Spatial Hash Grid
+// Spatial Hash Grid (pooled — zero allocation per tick)
 // ========================
 class SpatialHash {
   private cells: Map<number, string[]> = new Map();
+  private cellLengths: Map<number, number> = new Map();
   private cs: number;
+  // Reusable query result buffer
+  private _queryBuf: string[] = [];
 
   constructor(cs: number) { this.cs = cs; }
 
@@ -18,26 +21,50 @@ class SpatialHash {
     return ((cx & 0xffff) << 16) | (cy & 0xffff);
   }
 
-  clear(): void { this.cells.clear(); }
+  clear(): void {
+    // Don't delete cells — just reset their logical lengths to 0
+    this.cellLengths.forEach((_len, key) => {
+      this.cellLengths.set(key, 0);
+    });
+  }
 
   insert(x: number, y: number, id: string): void {
     const cx = (x / this.cs) | 0, cy = (y / this.cs) | 0;
     const k = this.k(cx, cy);
     let cell = this.cells.get(k);
-    if (!cell) { cell = []; this.cells.set(k, cell); }
-    cell.push(id);
+    let len = this.cellLengths.get(k) ?? 0;
+    if (!cell) {
+      cell = [];
+      this.cells.set(k, cell);
+    }
+    if (len < cell.length) {
+      cell[len] = id;
+    } else {
+      cell.push(id);
+    }
+    this.cellLengths.set(k, len + 1);
   }
 
+  /** Returns a shared buffer — caller must consume before next query call */
   query(x: number, y: number, radius: number): string[] {
-    const result: string[] = [];
+    const result = this._queryBuf;
+    let ri = 0;
     const minCx = ((x - radius) / this.cs) | 0, maxCx = ((x + radius) / this.cs) | 0;
     const minCy = ((y - radius) / this.cs) | 0, maxCy = ((y + radius) / this.cs) | 0;
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
-        const cell = this.cells.get(this.k(cx, cy));
-        if (cell) for (const id of cell) result.push(id);
+        const k = this.k(cx, cy);
+        const cell = this.cells.get(k);
+        if (!cell) continue;
+        const len = this.cellLengths.get(k)!;
+        for (let i = 0; i < len; i++) {
+          if (ri < result.length) result[ri] = cell[i];
+          else result.push(cell[i]);
+          ri++;
+        }
       }
     }
+    result.length = ri;
     return result;
   }
 }
@@ -190,6 +217,9 @@ const DEFAULT_CONFIG: GameConfig = {
 const VIEW_RADIUS = 4000;
 const VIEW_RADIUS_SQ = VIEW_RADIUS * VIEW_RADIUS;
 
+// Hard cap on snake length to prevent memory issues
+const MAX_SNAKE_LENGTH = 2000;
+
 const SNAKE_COLORS = [
   '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6',
   '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#84cc16',
@@ -215,7 +245,8 @@ export class GameRoom {
   private foods: Food[] = [];
   private config: GameConfig;
   private tick = 0;
-  private loopInterval: ReturnType<typeof setInterval> | null = null;
+  private loopTimer: ReturnType<typeof setTimeout> | null = null;
+  private loopRunning = false;
   private botIdCounter = 0;
   private readonly minBots = 14;
   // Spatial hash: cell size = 2x segment collision radius for efficiency
@@ -225,6 +256,8 @@ export class GameRoom {
   // Food spatial hash for O(1) bot food queries
   private foodHash = new FoodSpatialHash(300);
   private foodHashDirty = true;
+  // Food ID → index map for O(1) lookup in handleFoodEaten
+  private foodIdMap: Map<string, number> = new Map();
   // Monotonic food ID counter (avoids Date.now + Math.random per food)
   private foodIdCounter = 0;
   // Pre-built per-tick head position index for fast O(1) lookup
@@ -234,30 +267,57 @@ export class GameRoom {
   private readonly _checked = new Set<string>();
   private readonly _seenIds = new Set<string>();
 
+  // Cached player counts — updated once per tick via _refreshCounts()
+  private _humanCount = 0;
+  private _botCount = 0;
+  private _humansAlive = 0;
+  private _botsAlive = 0;
+  private _countsDirty = true;
+
   constructor(config?: Partial<GameConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   // ========================
-  // Public getters
+  // Public getters (cached — O(1))
   // ========================
 
+  private _refreshCounts(): void {
+    if (!this._countsDirty) return;
+    let hc = 0, bc = 0, ha = 0, ba = 0;
+    this.players.forEach((sp) => {
+      if (sp.isBot) {
+        bc++;
+        if (sp.player.alive) ba++;
+      } else {
+        hc++;
+        if (sp.player.alive) ha++;
+      }
+    });
+    this._humanCount = hc;
+    this._botCount = bc;
+    this._humansAlive = ha;
+    this._botsAlive = ba;
+    this._countsDirty = false;
+  }
+
   get humanCount(): number {
-    return Array.from(this.players.values()).filter(p => !p.isBot).length;
+    this._refreshCounts();
+    return this._humanCount;
   }
 
   get totalAliveCount(): number {
-    return Array.from(this.players.values()).filter(p => p.player.alive).length;
+    this._refreshCounts();
+    return this._humansAlive + this._botsAlive;
   }
 
   public getStats() {
-    const humans = Array.from(this.players.values()).filter(p => !p.isBot);
-    const bots = Array.from(this.players.values()).filter(p => p.isBot);
+    this._refreshCounts();
     return {
-      humans: humans.length,
-      humansAlive: humans.filter(p => p.player.alive).length,
-      bots: bots.length,
-      botsAlive: bots.filter(p => p.player.alive).length,
+      humans: this._humanCount,
+      humansAlive: this._humansAlive,
+      bots: this._botCount,
+      botsAlive: this._botsAlive,
       foods: this.foods.length,
       tick: this.tick,
       worldSize: this.config.worldSize,
@@ -272,19 +332,40 @@ export class GameRoom {
     this.generateFoods(this.config.foodCount);
     this.spawnBots(this.minBots);
 
-    this.loopInterval = setInterval(() => {
-      this.update();
-      this.broadcast();
-    }, 1000 / this.config.tickRate);
+    const tickMs = 1000 / this.config.tickRate;
+    let lastTick = performance.now();
+    this.loopRunning = true;
 
-    console.log(`[Room] Game loop started at ${this.config.tickRate} tps`);
+    const loop = () => {
+      if (!this.loopRunning) return;
+      const now = performance.now();
+      const elapsed = now - lastTick;
+
+      try {
+        this.update();
+        this.broadcast();
+      } catch (err) {
+        console.error('[Room] Tick error (recovered):', err);
+      }
+
+      lastTick = now;
+      // Compensate for drift: subtract processing time from next delay
+      const processingTime = performance.now() - now;
+      const nextDelay = Math.max(1, tickMs - processingTime);
+      this.loopTimer = setTimeout(loop, nextDelay);
+    };
+
+    this.loopTimer = setTimeout(loop, tickMs);
+
+    console.log(`[Room] Game loop started at ${this.config.tickRate} tps (precision timer)`);
     console.log(`[Room] World: ${this.config.worldSize}x${this.config.worldSize}, Food: ${this.config.foodCount}`);
   }
 
   public stop(): void {
-    if (this.loopInterval) {
-      clearInterval(this.loopInterval);
-      this.loopInterval = null;
+    this.loopRunning = false;
+    if (this.loopTimer) {
+      clearTimeout(this.loopTimer);
+      this.loopTimer = null;
     }
     console.log('[Room] Game loop stopped');
   }
@@ -324,6 +405,7 @@ export class GameRoom {
       this.players.delete(playerId);
     }
     this.wsToPlayerId.delete(ws);
+    this._countsDirty = true;
 
     // Refill bots
     this.maintainBots();
@@ -335,7 +417,10 @@ export class GameRoom {
   // ========================
 
   private handleJoin(ws: WebSocket, payload: any): void {
+    if (!payload || typeof payload !== 'object') return;
     const { playerId, playerName, color, photoURL } = payload;
+    if (typeof playerId !== 'string' || typeof playerName !== 'string') return;
+    if (playerId.length > 128 || playerName.length > 32) return;
 
     // Disconnect old session if reconnecting
     if (this.players.has(playerId)) {
@@ -360,6 +445,7 @@ export class GameRoom {
 
     this.players.set(playerId, sp);
     this.wsToPlayerId.set(ws, playerId);
+    this._countsDirty = true;
 
     // Send welcome with config
     this.sendTo(ws, {
@@ -385,25 +471,35 @@ export class GameRoom {
     if (!sp || !sp.player.alive) return;
 
     const { foodId } = payload;
-    const foodIdx = this.foods.findIndex(f => f.id === foodId);
-    if (foodIdx !== -1) {
+    if (typeof foodId !== 'string') return;
+
+    const foodIdx = this.foodIdMap.get(foodId);
+    if (foodIdx !== undefined && foodIdx < this.foods.length) {
       const food = this.foods[foodIdx];
-      sp.player.score += food.value;
-      sp.player.length += this.config.growthRate;
-      this.foods[foodIdx] = this.createFood();
-      this.foodHashDirty = true;
+      if (food.id === foodId) {
+        sp.player.score += food.value;
+        sp.player.length = Math.min(sp.player.length + this.config.growthRate, MAX_SNAKE_LENGTH);
+        // Replace with new food
+        const newFood = this.createFood();
+        this.foods[foodIdx] = newFood;
+        this.foodIdMap.delete(foodId);
+        this.foodIdMap.set(newFood.id, foodIdx);
+        this.foodHashDirty = true;
+      }
     }
   }
 
   private handleMove(ws: WebSocket, payload: any): void {
+    if (!payload || typeof payload !== 'object') return;
     const playerId = this.wsToPlayerId.get(ws);
     if (!playerId) return;
 
     const sp = this.players.get(playerId);
     if (!sp || !sp.player.alive) return;
 
-    if (payload.direction) {
+    if (payload.direction && typeof payload.direction.x === 'number' && typeof payload.direction.y === 'number') {
       const { x, y } = payload.direction;
+      if (!isFinite(x) || !isFinite(y)) return;
       const len = Math.sqrt(x * x + y * y);
       if (len > 0) {
         sp.inputDirection = { x: x / len, y: y / len };
@@ -411,7 +507,7 @@ export class GameRoom {
     }
 
     // Use client-reported position for viewport culling (reduces divergence)
-    if (payload.position && typeof payload.position.x === 'number') {
+    if (payload.position && typeof payload.position.x === 'number' && isFinite(payload.position.x) && isFinite(payload.position.y)) {
       sp.player.segments[0] = {
         x: Math.max(0, Math.min(this.config.worldSize, payload.position.x)),
         y: Math.max(0, Math.min(this.config.worldSize, payload.position.y)),
@@ -504,8 +600,12 @@ export class GameRoom {
           const dx = nx - food.position.x, dy = ny - food.position.y;
           if (dx * dx + dy * dy < botEatR * botEatR) {
             sp.player.score += food.value;
-            sp.player.length += this.config.growthRate;
-            this.foods[eatIdx] = this.createFood();
+            sp.player.length = Math.min(sp.player.length + this.config.growthRate, MAX_SNAKE_LENGTH);
+            // Replace food and update ID map
+            this.foodIdMap.delete(food.id);
+            const newFood = this.createFood();
+            this.foods[eatIdx] = newFood;
+            this.foodIdMap.set(newFood.id, eatIdx);
             this.foodHashDirty = true;
           }
         }
@@ -621,6 +721,7 @@ export class GameRoom {
           // Put bot in respawn queue instead of deleting immediately
           this.botRespawnQueue.push({ at: now + 2000 + Math.random() * 3000 });
           this.players.delete(id);
+          this._countsDirty = true;
         }
       }
     });
@@ -642,9 +743,22 @@ export class GameRoom {
 
     // ══ Phase 6: Refill food in batches of 50 (avoids GC spike) ══
     const foodTarget = (this.config.foodCount * 0.85) | 0;
+    const maxFoods = this.config.foodCount * 2; // Hard cap to prevent unbounded growth
     if (this.foods.length < foodTarget) {
       const batch = Math.min(50, foodTarget - this.foods.length);
-      for (let i = 0; i < batch; i++) this.foods.push(this.createFood());
+      for (let i = 0; i < batch; i++) {
+        const food = this.createFood();
+        const idx = this.foods.length;
+        this.foods.push(food);
+        this.foodIdMap.set(food.id, idx);
+      }
+      this.foodHashDirty = true;
+    } else if (this.foods.length > maxFoods) {
+      // Trim excess foods (from deaths dropping too many)
+      while (this.foods.length > this.config.foodCount) {
+        const removed = this.foods.pop()!;
+        this.foodIdMap.delete(removed.id);
+      }
       this.foodHashDirty = true;
     }
   }
@@ -655,6 +769,7 @@ export class GameRoom {
 
   private killPlayer(sp: ServerPlayer, killedBy: string | null, _deadSet: Set<string>): void {
     sp.player.alive = false;
+    this._countsDirty = true;
 
     // Notify the player
     if (sp.ws && sp.ws.readyState === WebSocket.OPEN) {
@@ -672,7 +787,7 @@ export class GameRoom {
   }
 
   // ========================
-  // Broadcasting
+  // Broadcasting (optimized: food spatial hash culling, reduced allocations)
   // ========================
 
   private broadcast(): void {
@@ -680,6 +795,14 @@ export class GameRoom {
     if (this.tick % 2 !== 0) return;
 
     const now = Date.now();
+
+    // Pre-build alive players list once (avoids repeated Map iteration)
+    const alivePlayers: Array<{ id: string; sp: ServerPlayer }> = [];
+    this.players.forEach((sp, id) => {
+      if (sp.player.alive && sp.player.segments.length > 0) {
+        alivePlayers.push({ id, sp });
+      }
+    });
 
     this.players.forEach((sp, currentPlayerId) => {
       if (!sp.ws || sp.ws.readyState !== WebSocket.OPEN || !sp.player.alive) return;
@@ -689,48 +812,47 @@ export class GameRoom {
 
       // Cull players + LOD: send fewer segments for distant snakes
       const playerData: Record<string, any> = {};
-      this.players.forEach((other, id) => {
-        if (!other.player.alive) return;
+      const hx = head.x, hy = head.y;
+
+      for (let ai = 0; ai < alivePlayers.length; ai++) {
+        const { id, sp: other } = alivePlayers[ai];
         const otherHead = other.player.segments[0];
-        if (!otherHead) return;
-        const dx = head.x - otherHead.x;
-        const dy = head.y - otherHead.y;
+        const dx = hx - otherHead.x;
+        const dy = hy - otherHead.y;
         const distSq = dx * dx + dy * dy;
-        if (distSq > VIEW_RADIUS_SQ) return;
+        if (distSq > VIEW_RADIUS_SQ) continue;
 
         const isSelf = id === currentPlayerId;
+        const segLen = other.player.segments.length;
         const maxSegs = isSelf
-          ? other.player.segments.length
-          : distSq < 800 * 800
-            ? other.player.segments.length
-            : distSq < 1500 * 1500
-              ? Math.min(other.player.segments.length, 80)
-              : Math.min(other.player.segments.length, 30);
+          ? segLen
+          : distSq < 640_000  // 800²
+            ? segLen
+            : distSq < 2_250_000  // 1500²
+              ? Math.min(segLen, 80)
+              : Math.min(segLen, 30);
 
         playerData[id] = {
           id: other.player.id,
           name: other.player.name,
           photoURL: other.player.photoURL,
           color: other.player.color,
-          segments: other.player.segments.slice(0, maxSegs),
+          segments: maxSegs < segLen ? other.player.segments.slice(0, maxSegs) : other.player.segments,
           direction: other.player.direction,
           score: other.player.score,
           length: other.player.length,
-          alive: other.player.alive,
+          alive: true,
           boosting: other.player.boosting,
           speed: other.player.speed,
           lastUpdate: other.player.lastUpdate,
         };
-      });
+      }
 
-      // Cull foods: only nearby
-      const nearbyFoods: Food[] = [];
-      for (const food of this.foods) {
-        const dx = food.position.x - head.x;
-        const dy = food.position.y - head.y;
-        if (dx * dx + dy * dy <= VIEW_RADIUS_SQ) {
-          nearbyFoods.push(food);
-        }
+      // Cull foods via food spatial hash — O(1) instead of O(n) linear scan
+      const nearFoodIdxs = this.foodHash.queryInRange(hx, hy, VIEW_RADIUS, this.foods);
+      const nearbyFoods: Food[] = new Array(nearFoodIdxs.length);
+      for (let fi = 0; fi < nearFoodIdxs.length; fi++) {
+        nearbyFoods[fi] = this.foods[nearFoodIdxs[fi]];
       }
 
       try {
@@ -807,6 +929,7 @@ export class GameRoom {
     };
 
     this.players.set(id, sp);
+    this._countsDirty = true;
   }
 
   private maintainBots(): void {
@@ -814,6 +937,7 @@ export class GameRoom {
     this.players.forEach((sp, id) => {
       if (sp.isBot && !sp.player.alive) this.players.delete(id);
     });
+    this._countsDirty = true;
 
     const aliveBots = Array.from(this.players.values()).filter(p => p.isBot && p.player.alive).length;
     const pendingRespawns = this.botRespawnQueue.length;
@@ -837,26 +961,31 @@ export class GameRoom {
       // Re-evaluate state every N ticks
       mem.stateTimer = 20 + ((Math.random() * 25) | 0);
 
-      // Check danger: is there a large snake nearby?
+      // Check danger: is there a large snake nearby? (use head hash — O(1) instead of iterating all)
       let nearestThreatDist = Infinity;
       let nearestThreatDirX = 0;
       let nearestThreatDirY = 0;
       let hasThreat = false;
-      this.players.forEach((other) => {
-        if (other === sp || !other.player.alive) return;
+      const threatR = 500;
+      const nearbyHeadIds = this.headHash.query(head.x, head.y, threatR);
+      for (let ni = 0; ni < nearbyHeadIds.length; ni++) {
+        const otherId = nearbyHeadIds[ni];
+        if (otherId === sp.player.id) continue;
+        const other = this.players.get(otherId);
+        if (!other || !other.player.alive) continue;
         const oh = other.player.segments[0];
-        if (!oh) return;
+        if (!oh) continue;
         const dx = oh.x - head.x;
         const dy = oh.y - head.y;
         const dist2 = dx*dx + dy*dy;
         // Threat if other is bigger and close
-        if (other.player.length > sp.player.length * 0.8 && dist2 < 500*500 && dist2 < nearestThreatDist) {
+        if (other.player.length > sp.player.length * 0.8 && dist2 < threatR*threatR && dist2 < nearestThreatDist) {
           nearestThreatDist = dist2;
           nearestThreatDirX = dx;
           nearestThreatDirY = dy;
           hasThreat = true;
         }
-      });
+      }
 
       if (nearestThreatDist < 200*200 && mem.personalityAggression < 0.6) {
         mem.state = 'flee';
@@ -969,15 +1098,9 @@ export class GameRoom {
 
     // Boosting logic: only boost when in flee state or chasing very close food
     if (mem.state !== 'flee') {
-      let closestFoodSq = Infinity;
-      for (let i = 0; i < Math.min(this.foods.length, 100); i++) {
-        const f = this.foods[i];
-        const dx = f.position.x - head.x;
-        const dy = f.position.y - head.y;
-        const d = dx*dx + dy*dy;
-        if (d < closestFoodSq) closestFoodSq = d;
-      }
-      sp.inputBoosting = closestFoodSq < 120*120 && sp.player.length > 20 && Math.random() < 0.04;
+      // Use food spatial hash for O(1) nearest food check
+      const nearestIdx = this.foodHash.queryNearest(head.x, head.y, 120, this.foods);
+      sp.inputBoosting = nearestIdx >= 0 && sp.player.length > 20 && Math.random() < 0.04;
     }
   }
 
@@ -1042,8 +1165,11 @@ export class GameRoom {
 
   private generateFoods(count: number): void {
     this.foods = [];
+    this.foodIdMap.clear();
     for (let i = 0; i < count; i++) {
-      this.foods.push(this.createFood());
+      const food = this.createFood();
+      this.foodIdMap.set(food.id, i);
+      this.foods.push(food);
     }
   }
 
@@ -1053,7 +1179,7 @@ export class GameRoom {
       const segIdx = (Math.random() * player.segments.length) | 0;
       const seg = player.segments[segIdx];
       if (seg) {
-        this.foods.push({
+        const food: Food = {
           id: `fd${this.foodIdCounter++}`,
           position: {
             x: seg.x + (Math.random() - 0.5) * 40,
@@ -1062,7 +1188,10 @@ export class GameRoom {
           color: player.color,
           size: Math.random() * 4 + 5,
           value: ((Math.random() * 3) | 0) + 2,
-        });
+        };
+        const idx = this.foods.length;
+        this.foods.push(food);
+        this.foodIdMap.set(food.id, idx);
       }
     }
     this.foodHashDirty = true;

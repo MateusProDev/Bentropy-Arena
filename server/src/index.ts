@@ -1,14 +1,46 @@
 // ============================================================
 // Bentropy Arena - WebSocket Game Server
+// Production-hardened for 24/7 uptime
 // ============================================================
 
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer, IncomingMessage } from 'http';
-import { Socket } from 'net';
+import { createServer } from 'http';
+import type { IncomingMessage } from 'http';
 import { GameRoom } from './GameRoom.js';
 
 const PORT = parseInt(process.env.PORT || '8080');
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*').split(',');
+const MAX_CONNECTIONS = parseInt(process.env.MAX_CONNECTIONS || '100');
+const MSG_RATE_LIMIT = 60; // max messages per second per client
+const MSG_RATE_WINDOW = 1000; // ms
+
+// ========================
+// Process-level error resilience
+// ========================
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message, err.stack);
+  // Don't exit — keep serving. Railway will restart if we do exit.
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+});
+
+// ========================
+// Memory monitoring (log every 60s)
+// ========================
+const MEM_LOG_INTERVAL = 60_000;
+setInterval(() => {
+  const mem = process.memoryUsage();
+  const rss = (mem.rss / 1024 / 1024).toFixed(1);
+  const heap = (mem.heapUsed / 1024 / 1024).toFixed(1);
+  const heapTotal = (mem.heapTotal / 1024 / 1024).toFixed(1);
+  const external = (mem.external / 1024 / 1024).toFixed(1);
+  console.log(`[MEM] RSS=${rss}MB Heap=${heap}/${heapTotal}MB Ext=${external}MB Conns=${wss.clients.size}`);
+}, MEM_LOG_INTERVAL).unref();
+
+// Per-client rate limiting tracking
+const clientMsgCounts = new WeakMap<WebSocket, { count: number; resetAt: number }>();
 
 // HTTP server for health checks
 const server = createServer((req, res) => {
@@ -26,12 +58,19 @@ const server = createServer((req, res) => {
   }
 
   if (req.url === '/health') {
+    const mem = process.memoryUsage();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
       players: room.humanCount,
       totalEntities: room.totalAliveCount,
+      connections: wss.clients.size,
       uptime: Math.floor(process.uptime()),
+      memory: {
+        rss: Math.floor(mem.rss / 1024 / 1024),
+        heapUsed: Math.floor(mem.heapUsed / 1024 / 1024),
+        heapTotal: Math.floor(mem.heapTotal / 1024 / 1024),
+      },
     }));
     return;
   }
@@ -83,7 +122,15 @@ const room = new GameRoom();
 
 wss.on('connection', (ws: WebSocket, req) => {
   const origin = req.headers.origin || 'unknown';
-  console.log(`[WS] New connection from origin: ${origin}`);
+
+  // ── Connection limit ──
+  if (wss.clients.size > MAX_CONNECTIONS) {
+    console.warn(`[WS] Connection rejected — limit ${MAX_CONNECTIONS} reached`);
+    ws.close(1013, 'Server full');
+    return;
+  }
+
+  console.log(`[WS] New connection from origin: ${origin} (total: ${wss.clients.size})`);
 
   // Keep-alive ping every 25 seconds to prevent Railway from closing idle connections
   let isAlive = true;
@@ -95,7 +142,7 @@ wss.on('connection', (ws: WebSocket, req) => {
     }
     isAlive = false;
     ws.ping();
-  }, 25000);
+  }, 25_000);
 
   ws.on('pong', () => {
     isAlive = true;
@@ -103,10 +150,32 @@ wss.on('connection', (ws: WebSocket, req) => {
 
   ws.on('message', (data) => {
     try {
-      const msg = JSON.parse(data.toString());
+      // ── Rate limiting per client ──
+      const now = Date.now();
+      let rl = clientMsgCounts.get(ws);
+      if (!rl) {
+        rl = { count: 0, resetAt: now + MSG_RATE_WINDOW };
+        clientMsgCounts.set(ws, rl);
+      }
+      if (now >= rl.resetAt) {
+        rl.count = 0;
+        rl.resetAt = now + MSG_RATE_WINDOW;
+      }
+      rl.count++;
+      if (rl.count > MSG_RATE_LIMIT) {
+        // Silently drop excess messages
+        return;
+      }
+
+      const raw = data.toString();
+      if (raw.length > 2048) return; // Drop oversized messages
+
+      const msg = JSON.parse(raw);
+      if (!msg || typeof msg.type !== 'string') return;
+
       room.handleMessage(ws, msg);
-    } catch (e) {
-      console.error('[WS] Invalid message:', e);
+    } catch (_e) {
+      // Malformed JSON — silently ignore (don't log spam)
     }
   });
 
@@ -146,18 +215,29 @@ server.listen(PORT, () => {
   console.log('');
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[Server] Shutting down...');
+// Graceful shutdown with timeout
+function shutdown(signal: string): void {
+  console.log(`\n[Server] ${signal} received — shutting down gracefully...`);
   room.stop();
-  wss.close();
-  server.close();
-  process.exit(0);
-});
 
-process.on('SIGTERM', () => {
-  room.stop();
-  wss.close();
-  server.close();
-  process.exit(0);
-});
+  // Close all WebSocket connections cleanly
+  for (const client of wss.clients) {
+    try { client.close(1001, 'Server shutting down'); } catch (_e) { /* ignore */ }
+  }
+
+  wss.close(() => {
+    server.close(() => {
+      console.log('[Server] Shutdown complete');
+      process.exit(0);
+    });
+  });
+
+  // Force exit after 5 seconds if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('[Server] Forced shutdown after timeout');
+    process.exit(1);
+  }, 5000).unref();
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
