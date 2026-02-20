@@ -248,7 +248,7 @@ export class GameRoom {
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
   private loopRunning = false;
   private botIdCounter = 0;
-  private readonly minBots = 14;
+  private readonly minBots = 0;
   // Spatial hash: cell size = 2x segment collision radius for efficiency
   private spatialHash = new SpatialHash(160);
   // Head spatial hash for O(1) head-to-head collision
@@ -330,7 +330,6 @@ export class GameRoom {
 
   public start(): void {
     this.generateFoods(this.config.foodCount);
-    this.spawnBots(this.minBots);
 
     const tickMs = 1000 / this.config.tickRate;
     let lastTick = performance.now();
